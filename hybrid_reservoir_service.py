@@ -31,6 +31,10 @@ app.mount("/ui", StaticFiles(directory=_UI_DIR, html=False), name="ui")
 # sessionId -> event queue (SSE)
 _session_queues: Dict[str, "asyncio.Queue[dict]"] = {}
 
+# sessionId -> background dynasty auto-run task
+_dynasty_auto_tasks: Dict[str, asyncio.Task] = {}
+_dynasty_auto_cfg: Dict[str, dict] = {}
+
 # ============================================================
 # CORS (Fixes your browser issue)
 # ============================================================
@@ -371,10 +375,80 @@ async def chat(request: ChatRequest):
         tools = _skills_to_openai_tools(skills)
 
         # ------------------------------------------------------------
-        # Direct tool command mode (deterministic)
+        # Direct command mode (deterministic)
         # ------------------------------------------------------------
         last_user = (request.messages[-1].content.strip() if request.messages else "")
         skill_names = {s.get("name") for s in skills if s.get("name")}
+
+        # dynasty_auto toggle (not a bridge skill)
+        if last_user.startswith("dynasty_auto"):
+            arg_text = last_user[len("dynasty_auto"):].strip()
+            args = {}
+            if arg_text:
+                try:
+                    args = json.loads(arg_text)
+                except Exception:
+                    return {
+                        "id": f"auto-{os.urandom(6).hex()}",
+                        "object": "chat.completion",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "[dynasty_auto] parse error: expected JSON after dynasty_auto"}, "finish_reason": "stop"}],
+                    }
+
+            enabled = args.get("enabled")
+            if enabled is None and args == {}:
+                # status
+                running = session_id in _dynasty_auto_tasks and not _dynasty_auto_tasks[session_id].done()
+                cfg = _dynasty_auto_cfg.get(session_id)
+                return {
+                    "id": f"auto-{os.urandom(6).hex()}",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": json.dumps({"enabled": running, "config": cfg}, indent=2)}, "finish_reason": "stop"}],
+                }
+
+            if enabled is False:
+                t = _dynasty_auto_tasks.get(session_id)
+                if t and not t.done():
+                    t.cancel()
+                _dynasty_auto_tasks.pop(session_id, None)
+                await _sse_emit(session_id, "mark", {"label": "dynasty_auto:off"})
+                return {
+                    "id": f"auto-{os.urandom(6).hex()}",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "[dynasty_auto] disabled"}, "finish_reason": "stop"}],
+                }
+
+            if enabled is True:
+                interval = int(args.get("intervalSec", 900))
+                steps = int(args.get("steps", 200000))
+                emit_every = int(args.get("emitEvery", steps))
+                # keep it sane
+                interval = max(10, min(interval, 86400))
+                steps = max(1, min(steps, 5_000_000))
+                emit_every = max(1, min(emit_every, steps))
+
+                _dynasty_auto_cfg[session_id] = {"intervalSec": interval, "steps": steps, "emitEvery": emit_every}
+
+                # stop existing
+                t = _dynasty_auto_tasks.get(session_id)
+                if t and not t.done():
+                    t.cancel()
+
+                async def auto_loop():
+                    await _sse_emit(session_id, "mark", {"label": "dynasty_auto:on", "note": _dynasty_auto_cfg[session_id]})
+                    while True:
+                        try:
+                            # bounded run, no export
+                            await _bridge_invoke("dynasty_step", {"n": steps, "emitEvery": emit_every, "includeWeights": False}, session_id)
+                        except Exception as e:
+                            await _sse_emit(session_id, "bridge", {"error": f"dynasty_auto tick failed: {e!r}"})
+                        await asyncio.sleep(interval)
+
+                _dynasty_auto_tasks[session_id] = asyncio.create_task(auto_loop())
+                return {
+                    "id": f"auto-{os.urandom(6).hex()}",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": json.dumps({"enabled": True, "config": _dynasty_auto_cfg[session_id]}, indent=2)}, "finish_reason": "stop"}],
+                }
 
         if last_user:
             head, *rest = last_user.split(" ", 1)
