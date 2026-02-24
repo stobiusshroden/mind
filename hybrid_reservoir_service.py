@@ -421,12 +421,13 @@ async def chat(request: ChatRequest):
                 interval = int(args.get("intervalSec", 900))
                 steps = int(args.get("steps", 200000))
                 emit_every = int(args.get("emitEvery", steps))
+                preset = str(args.get("preset", ""))
                 # keep it sane
                 interval = max(10, min(interval, 86400))
                 steps = max(1, min(steps, 5_000_000))
                 emit_every = max(1, min(emit_every, steps))
 
-                _dynasty_auto_cfg[session_id] = {"intervalSec": interval, "steps": steps, "emitEvery": emit_every}
+                _dynasty_auto_cfg[session_id] = {"intervalSec": interval, "steps": steps, "emitEvery": emit_every, "preset": preset}
 
                 # stop existing
                 t = _dynasty_auto_tasks.get(session_id)
@@ -437,6 +438,9 @@ async def chat(request: ChatRequest):
                     await _sse_emit(session_id, "mark", {"label": "dynasty_auto:on", "note": _dynasty_auto_cfg[session_id]})
                     while True:
                         try:
+                            # Optional preset application before each tick
+                            if _dynasty_auto_cfg.get(session_id, {}).get("preset"):
+                                await _bridge_invoke("dynasty_preset", {"name": _dynasty_auto_cfg[session_id]["preset"]}, session_id)
                             # bounded run, no export
                             await _bridge_invoke("dynasty_step", {"n": steps, "emitEvery": emit_every, "includeWeights": False}, session_id)
                         except Exception as e:
