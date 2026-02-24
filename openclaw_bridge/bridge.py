@@ -387,11 +387,144 @@ async def _run_internal(job: Job, skill: dict) -> None:
 
     session_id = str((job.context or {}).get("sessionId") or "default")
 
+    def apply_dynasty_overrides(st: DynastyState, args: Dict[str, Any]) -> None:
+        # optional param overrides
+        if "dt" in args: st.dt = float(args["dt"])
+        if "omega" in args: st.omega = float(args["omega"])
+        if "beta" in args: st.beta = float(args["beta"])
+        if "gamma" in args: st.gamma = float(args["gamma"])
+        if "eta" in args: st.eta = float(args["eta"])
+        if "delay" in args: st.delay = int(args["delay"])
+        if "learning" in args: st.learning = bool(args["learning"])
+
+        plast = args.get("plasticity")
+        if isinstance(plast, dict):
+            if "enabled" in plast: st.plastic_enabled = bool(plast["enabled"])
+            if "mu" in plast: st.plastic_mu = float(plast["mu"])
+            if "emaAlpha" in plast: st.plastic_ema_alpha = float(plast["emaAlpha"])
+            if "eps" in plast: st.plastic_eps = float(plast["eps"])
+            if "relax" in plast: st.plastic_relax = float(plast["relax"])
+            if "EHigh" in plast: st.plastic_E_high = float(plast["EHigh"])
+            if "gammaMin" in plast: st.gamma_min = float(plast["gammaMin"])
+            if "gammaMax" in plast: st.gamma_max = float(plast["gammaMax"])
+            if st.gamma_max < st.gamma_min:
+                st.gamma_max, st.gamma_min = st.gamma_min, st.gamma_max
+            st.gamma = max(st.gamma_min, min(st.gamma_max, st.gamma))
+
     if job.skill == "dynasty_status":
         st = _dynasty_get(session_id)
         include_w = bool(job.args.get("includeWeights", True))
         job.result = {"sessionId": session_id, "state": st.snapshot(include_weights=include_w)}
         job.status = "succeeded"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status})
+        return
+
+    if job.skill == "dynasty_export_run":
+        st = _dynasty_get(session_id)
+        apply_dynasty_overrides(st, job.args)
+
+        if bool(job.args.get("reset", False)):
+            st.reset(seed=job.args.get("seed"))
+            await _emit(job, "mark", {"sessionId": session_id, "label": "export:reset", "note": "reset before export", "t": st.t})
+
+        steps = int(job.args.get("steps", 200000))
+        sample_every = int(job.args.get("sampleEvery", 200))
+        include_w = bool(job.args.get("includeWeights", True))
+
+        artifacts_dir = Path(job.artifactsDir)
+        csv_path = artifacts_dir / "dynasty_export.csv"
+        json_path = artifacts_dir / "dynasty_export.json"
+
+        rows: List[Dict[str, Any]] = []
+        first = None
+        last = None
+
+        for i in range(steps):
+            if job.status == "canceled":
+                break
+            last = st.step_once()
+            if first is None:
+                first = dict(last)
+            if (i % sample_every) == 0 or i == (steps - 1):
+                rec = {
+                    "i": i,
+                    "t": last.get("t"),
+                    "E": last.get("E"),
+                    "rms": last.get("rms"),
+                    "ema_rms": last.get("ema_rms"),
+                    "gamma": last.get("gamma"),
+                    "dgamma": last.get("dgamma"),
+                    "q": last.get("q"),
+                    "p": last.get("p"),
+                    "S4": last.get("S4"),
+                    "u": last.get("u"),
+                    "target": last.get("target"),
+                    "y": last.get("y"),
+                    "err": last.get("err"),
+                }
+                if include_w:
+                    rec["w"] = list(st.w)
+                rows.append(rec)
+
+            if (i % 50000) == 0:
+                await _emit(job, "metrics", {"sessionId": session_id, "kind": "export_progress", "i": i, "steps": steps, "metrics": last, "w": list(st.w) if include_w else None})
+                await asyncio.sleep(0)
+
+        # Write CSV
+        import csv
+        fieldnames = ["i","t","E","rms","ema_rms","gamma","dgamma","q","p","S4","u","target","y","err"]
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            wcsv = csv.DictWriter(f, fieldnames=fieldnames)
+            wcsv.writeheader()
+            for r in rows:
+                wcsv.writerow({k: r.get(k) for k in fieldnames})
+
+        # Write JSON (includes weights)
+        json_payload = {
+            "sessionId": session_id,
+            "export": {
+                "steps": steps,
+                "sampleEvery": sample_every,
+                "includeWeights": include_w,
+                "startedAt": job.startedAt,
+                "endedAt": time.time(),
+            },
+            "params": {
+                "dt": st.dt,
+                "omega": st.omega,
+                "beta": st.beta,
+                "gamma": st.gamma,
+                "eta": st.eta,
+                "delay": st.delay,
+                "learning": st.learning,
+                "plasticity": {
+                    "enabled": st.plastic_enabled,
+                    "mu": st.plastic_mu,
+                    "emaAlpha": st.plastic_ema_alpha,
+                    "eps": st.plastic_eps,
+                    "relax": st.plastic_relax,
+                    "EHigh": st.plastic_E_high,
+                    "gammaMin": st.gamma_min,
+                    "gammaMax": st.gamma_max,
+                },
+            },
+            "first": first,
+            "last": last,
+            "rows": rows,
+        }
+        json_path.write_text(json.dumps(json_payload), encoding="utf-8")
+
+        job.result = {
+            "sessionId": session_id,
+            "ok": True,
+            "csv": str(csv_path),
+            "json": str(json_path),
+            "samples": len(rows),
+            "first": first,
+            "last": last,
+        }
+        job.status = "succeeded" if job.status != "canceled" else "canceled"
         job.endedAt = time.time()
         await _emit(job, "lifecycle", {"status": job.status})
         return
@@ -514,30 +647,7 @@ async def _run_internal(job: Job, skill: dict) -> None:
 
     if job.skill == "dynasty_step":
         st = _dynasty_get(session_id)
-
-        # optional param overrides
-        if "dt" in job.args: st.dt = float(job.args["dt"])
-        if "omega" in job.args: st.omega = float(job.args["omega"])
-        if "beta" in job.args: st.beta = float(job.args["beta"])
-        if "gamma" in job.args: st.gamma = float(job.args["gamma"])
-        if "eta" in job.args: st.eta = float(job.args["eta"])
-
-        plast = job.args.get("plasticity")
-        if isinstance(plast, dict):
-            if "enabled" in plast: st.plastic_enabled = bool(plast["enabled"])
-            if "mu" in plast: st.plastic_mu = float(plast["mu"])
-            if "emaAlpha" in plast: st.plastic_ema_alpha = float(plast["emaAlpha"])
-            if "eps" in plast: st.plastic_eps = float(plast["eps"])
-            if "relax" in plast: st.plastic_relax = float(plast["relax"])
-            if "EHigh" in plast: st.plastic_E_high = float(plast["EHigh"])
-            if "gammaMin" in plast: st.gamma_min = float(plast["gammaMin"])
-            if "gammaMax" in plast: st.gamma_max = float(plast["gammaMax"])
-            # ensure sane bounds
-            if st.gamma_max < st.gamma_min:
-                st.gamma_max, st.gamma_min = st.gamma_min, st.gamma_max
-            st.gamma = max(st.gamma_min, min(st.gamma_max, st.gamma))
-        if "delay" in job.args: st.delay = int(job.args["delay"])
-        if "learning" in job.args: st.learning = bool(job.args["learning"])
+        apply_dynasty_overrides(st, job.args)
 
         if bool(job.args.get("reset", False)):
             st.reset(seed=job.args.get("seed"))

@@ -55,6 +55,15 @@ Returns:
 Emits:
 - `mark` event: `preset:<name>`
 
+### dynasty_export_run (internal)
+Args:
+- `steps: int` (default 200000)
+- `sampleEvery: int` (default 200)
+- `includeWeights: bool` (default true)
+- optional overrides: same params as `dynasty_step` including `plasticity` block
+Returns:
+- paths to `dynasty_export.csv` and `dynasty_export.json` in the job artifacts folder
+
 ## Operational convention
 - Prefer starting everything via `start_all.cmd`.
 - Prefer stopping via `stop_all.cmd`.

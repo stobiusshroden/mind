@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "skills": [
     {
       "name": "dynasty_status",
@@ -88,6 +88,45 @@
           "apply": { "type": "boolean", "default": true }
         },
         "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_export_run",
+      "description": "Run a bounded Dynasty segment and export a sampled time series (JSON/CSV) to the job artifacts folder. Includes full weights when includeWeights=true.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "steps": { "type": "integer", "minimum": 1, "maximum": 5000000, "default": 200000 },
+          "sampleEvery": { "type": "integer", "minimum": 1, "maximum": 100000, "default": 200 },
+          "includeWeights": { "type": "boolean", "default": true },
+          "reset": { "type": "boolean", "default": false },
+          "seed": { "type": "integer" },
+
+          "learning": { "type": "boolean" },
+          "dt": { "type": "number", "minimum": 1e-6, "maximum": 1.0 },
+          "omega": { "type": "number", "minimum": 1e-6, "maximum": 10.0 },
+          "beta": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+          "gamma": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+          "eta": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+          "delay": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "plasticity": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "mu": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+              "emaAlpha": { "type": "number", "minimum": 0.000001, "maximum": 0.5 },
+              "eps": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+              "relax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+              "gammaMin": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+              "gammaMax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+              "EHigh": { "type": "number", "minimum": 0.0, "maximum": 1000000000000.0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["steps"],
         "additionalProperties": false
       }
     },
