@@ -17,6 +17,11 @@ Prereqs:
 - Git (optional for running, required for publishing)
 - `OPENAI_API_KEY` set in your environment (Hybrid uses OpenAI for the conversational layer)
 
+### Setup (one command)
+```bat
+setup.cmd
+```
+
 ### Start everything
 ```bat
 start_all.cmd
