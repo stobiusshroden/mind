@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pdb
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+.venv_*/
+.venv_broken/
+
+# Local state / secrets / generated
+memory.json
+vector_memory.json
+behavior_state/
+openclaw_bridge/artifacts/
+openclaw_bridge/__pycache__/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Logs
+*.log

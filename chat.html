@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Hybrid Reservoir</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #0f1b2d;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            max-width: 75%;
+            white-space: pre-wrap;
+        }
+
+        .user {
+            background-color: #1f2f4a;
+            align-self: flex-end;
+        }
+
+        .assistant {
+            background-color: #2c4db0;
+            align-self: flex-start;
+        }
+
+        #input-container {
+            display: flex;
+            padding: 10px;
+            background-color: #0c1625;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 10px;
+            border-radius: 6px;
+            border: none;
+            font-size: 16px;
+        }
+
+        #send-btn {
+            margin-left: 10px;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            background-color: #3b6df0;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #send-btn:hover {
+            background-color: #5a82f7;
+        }
+    </style>
+</head>
+<body>
+
+<div id="chat-container"></div>
+
+<div id="input-container">
+    <input id="user-input" type="text" placeholder="Speak calmly..." />
+    <button id="send-btn">Send</button>
+</div>
+
+<script>
+    const chatContainer = document.getElementById("chat-container");
+    const inputField = document.getElementById("user-input");
+    const sendButton = document.getElementById("send-btn");
+
+    let conversationHistory = [];
+
+    // Stable client session id for tool-event SSE
+    let sessionId = localStorage.getItem("hybrid_session_id");
+    if (!sessionId) {
+        sessionId = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+            (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+        localStorage.setItem("hybrid_session_id", sessionId);
+    }
+
+    // Show backend versions
+    async function loadVersions() {
+        try {
+            const baseUrl = window.location.origin;
+            const [hv, bv] = await Promise.all([
+                fetch(`${baseUrl}/version`).then(r => r.json()),
+                fetch(`http://127.0.0.1:17171/version`).then(r => r.json())
+            ]);
+            dynastyBar.textContent = `[versions] hybrid=${hv.model} bridge_manifest=v${bv.manifestVersion}`;
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    // Live tool events
+    function startEventStream() {
+        const baseUrl = window.location.origin;
+        const es = new EventSource(`${baseUrl}/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
+
+        es.addEventListener("ready", (e) => {
+            // silent
+        });
+
+        function summarizeToolEvent(evtName, payload) {
+            if (evtName === "tool") {
+                const phase = payload.phase || "";
+                const skill = payload.skill || "";
+                const jid = payload.jobId ? ` jobId=${payload.jobId}` : "";
+                if (phase === "invoke") return `[tool] invoking ${skill}${jid}`;
+                if (phase === "started") return `[tool] started ${skill}${jid}`;
+                if (phase === "finished") return `[tool] finished ${skill} (${payload.status})${jid}`;
+                return `⟦tool⟧ ${skill} ${phase}`;
+            }
+            if (evtName === "bridge") {
+                // Keep it quiet by default; uncomment next line to see raw bridge data.
+                // return `⟦bridge⟧ ${JSON.stringify(payload)}`;
+                return null;
+            }
+            return null;
+        }
+
+        es.addEventListener("tool", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                const line = summarizeToolEvent("tool", payload);
+                if (line) addMessage("assistant", line);
+            } catch (_) {}
+        });
+
+        es.addEventListener("bridge", (e) => {
+            // default: suppressed
+        });
+
+        es.addEventListener("mark", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                addMessage("assistant", `[mark] ${payload.label}${payload.note ? ' — ' + payload.note : ''} (t=${payload.t ?? ''})`);
+            } catch (_) {}
+        });
+
+        es.addEventListener("metrics", (e) => {
+            // Metrics are high-volume; summarize lightly.
+            try {
+                const payload = JSON.parse(e.data);
+                const inner = payload.metrics || payload.state || payload.data || payload;
+                const m = inner.metrics || inner.state || inner;
+                if (m && typeof m === 'object') {
+                    const g = (m.gamma !== undefined) ? ` γ=${(m.gamma ?? 0).toFixed ? m.gamma.toFixed(6) : m.gamma}` : "";
+                    const dg = (m.dgamma !== undefined) ? ` Δγ=${(m.dgamma ?? 0).toExponential ? m.dgamma.toExponential(2) : m.dgamma}` : "";
+                    const er = (m.ema_rms !== undefined) ? ` eRMS=${(m.ema_rms ?? 0).toFixed ? m.ema_rms.toFixed(4) : m.ema_rms}` : "";
+                    const line = `[dynasty] t=${m.t ?? ''} E=${(m.E ?? 0).toFixed ? m.E.toFixed(4) : m.E} RMS=${(m.rms ?? 0).toFixed ? m.rms.toFixed(4) : m.rms}${er}${g}${dg}`;
+                    // Update a single status line to avoid DOM spam/lockups
+                    dynastyBar.textContent = line;
+                }
+            } catch (_) {}
+        });
+
+        es.onerror = () => {
+            // auto-reconnect is built-in; keep UI calm
+        };
+    }
+
+    loadVersions();
+    startEventStream();
+
+    function addMessage(role, content) {
+        const msg = document.createElement("div");
+        msg.classList.add("message", role);
+        msg.textContent = content;
+        chatContainer.appendChild(msg);
+
+        // cap message nodes to prevent lockups on high-frequency SSE
+        const MAX_NODES = 400;
+        while (chatContainer.children.length > MAX_NODES) {
+            chatContainer.removeChild(chatContainer.firstChild);
+        }
+
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    // A single-line live status bar for high-rate metrics
+    const dynastyBar = document.createElement('div');
+    dynastyBar.className = 'message assistant';
+    dynastyBar.style.opacity = '0.85';
+    dynastyBar.style.fontSize = '12px';
+    dynastyBar.style.backgroundColor = '#203a82';
+    dynastyBar.textContent = '[dynasty] (no metrics yet)';
+    chatContainer.appendChild(dynastyBar);
+
+    async function sendMessage() {
+        const userInput = inputField.value.trim();
+        if (!userInput) return;
+
+        addMessage("user", userInput);
+
+        conversationHistory.push({
+            role: "user",
+            content: userInput
+        });
+
+        inputField.value = "";
+
+        try {
+            const baseUrl = window.location.origin;
+            const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    sessionId: sessionId,
+                    messages: conversationHistory
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error("Server error: " + response.status);
+            }
+
+            const data = await response.json();
+
+            const assistantReply = data.choices[0].message.content;
+
+            addMessage("assistant", assistantReply);
+
+            conversationHistory.push({
+                role: "assistant",
+                content: assistantReply
+            });
+
+        } catch (error) {
+            console.error(error);
+            addMessage("assistant", "No response received.");
+        }
+    }
+
+    sendButton.addEventListener("click", sendMessage);
+
+    inputField.addEventListener("keypress", function(event) {
+        if (event.key === "Enter") {
+            sendMessage();
+        }
+    });
+</script>
+
+</body>
+</html>

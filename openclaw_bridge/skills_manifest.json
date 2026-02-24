@@ -1,0 +1,142 @@
+{
+  "version": 3,
+  "skills": [
+    {
+      "name": "dynasty_status",
+      "description": "Get current Dynasty v19 state + metrics for this sessionId (q,p,S4,E,RMS,weights).",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "includeWeights": { "type": "boolean", "default": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_step",
+      "description": "Advance Dynasty v19 by N steps; streams metrics over SSE while running (energy, RMS, weights optional).",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "n": { "type": "integer", "minimum": 0, "maximum": 500000, "description": "0 = continuous until canceled" },
+          "emitEvery": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 50 },
+          "includeWeights": { "type": "boolean", "default": false },
+          "learning": { "type": "boolean" },
+          "dt": { "type": "number", "minimum": 1e-6, "maximum": 1.0 },
+          "omega": { "type": "number", "minimum": 1e-6, "maximum": 10.0 },
+          "beta": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+          "gamma": { "type": "number", "minimum": 0.0, "maximum": 10.0, "description": "Oscillator damping coefficient" },
+          "plasticity": {
+            "type": "object",
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "mu": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Plasticity step size for gamma" },
+              "emaAlpha": { "type": "number", "minimum": 0.000001, "maximum": 0.5, "description": "EMA smoothing for RMS" },
+              "gammaMin": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+              "gammaMax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
+              "eps": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Deadband for EMA(RMS) delta" },
+              "relax": { "type": "number", "minimum": 0.0, "maximum": 10.0, "description": "Multiplier for decreasing gamma when RMS improves" },
+              "EHigh": { "type": "number", "minimum": 0.0, "maximum": 1000000000000.0, "description": "If E exceeds this, force gamma to increase" }
+            },
+            "additionalProperties": false
+          },
+          "eta": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+          "delay": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "reset": { "type": "boolean", "default": false },
+          "seed": { "type": "integer" }
+        },
+        "required": ["n"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_cancel",
+      "description": "Cancel a running dynasty_step continuous job. If jobId is omitted, cancels the most recent running dynasty_step for this sessionId.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": { "type": "string", "description": "Optional. If omitted, cancel latest running job for this session." }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_mark",
+      "description": "Emit a labeled marker event on the SSE stream for this sessionId (for annotating live runs).",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string" },
+          "note": { "type": "string" }
+        },
+        "required": ["label"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_preset",
+      "description": "Apply a named preset to Dynasty session parameters/plasticity (no stepping).",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "enum": ["bidirectional-default", "baseline"] },
+          "apply": { "type": "boolean", "default": true }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_run",
+      "description": "Open the Dynasty v19 clean HTML file in the default browser (local, no network).",
+      "kind": "command",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Basename of the dynasty HTML file (default: manifold-swarm-dynasty-v19-clean.html)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "runner": {
+        "type": "exec",
+        "command": [
+          "powershell",
+          "-NoProfile",
+          "-Command",
+          "Start-Process -FilePath '{path}'"
+        ],
+        "timeoutSec": 30
+      }
+    },
+    {
+      "name": "openclaw_status",
+      "description": "Run 'openclaw status' for local observability.",
+      "kind": "command",
+      "argsSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "runner": {
+        "type": "exec",
+        "command": [
+          "powershell",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "openclaw status"
+        ],
+        "timeoutSec": 20
+      }
+    }
+  ]
+}

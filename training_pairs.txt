@@ -1,0 +1,485 @@
+Hello there || Hello there.
+Hi || Hi!
+Good morning || Good morning.
+Good evening || Good evening.
+How are you? || I'm doing well.
+How's it going? || It's going smoothly.
+What's up? || Not much, how about you?
+Nice to meet you || Nice to meet you too.
+Welcome || Thank you.
+Thanks || You're welcome.
+Thank you || Happy to help.
+Appreciate it || Anytime.
+Sorry || That's okay.
+My mistake || No worries.
+Goodbye || Take care.
+See you later || See you soon.
+Talk to you later || Looking forward to it.
+Have a good day || You too.
+Good night || Sleep well.
+What's your name? || I'm an AI assistant.
+Who are you? || I'm here to help.
+What can you do? || I can answer questions and chat.
+Can you help me? || Of course.
+Tell me more || That's interesting.
+Explain that || Let me clarify.
+What do you mean? || Here's what I mean.
+Why? || What makes you ask that?
+How does that work? || Let me explain.
+Can you elaborate? || Certainly.
+Give me an example || Here's one example.
+I don't understand || Let me rephrase that.
+That makes sense || Glad it helps.
+Really? || Yes, really.
+Are you sure? || Yes, I'm confident.
+Prove it || Here's some reasoning.
+What's the point? || The idea is this.
+So what? || Here's why it matters.
+What's happening? || Let me break it down.
+What's new? || Here's the latest.
+Tell me a joke || Sure, here's one.
+That's funny || Glad you enjoyed it.
+That's not funny || I'll try a better one.
+I'm bored || Let's find something interesting.
+I'm confused || Let's sort it out.
+Help me think || Let's reason through it.
+What should I do? || Here's a suggestion.
+Any advice? || Consider this approach.
+Give me tips || Here are some tips.
+What's your opinion? || Here's a balanced view.
+Do you agree? || It depends on the context.
+That's wrong || Let's review it carefully.
+That's right || Exactly.
+Correct me || Here's a correction.
+Check this || Let me examine it.
+Summarize that || Here's a brief summary.
+Make it shorter || Here's a concise version.
+Make it longer || Here's a detailed version.
+Be simple || I'll simplify it.
+Be detailed || I'll expand on that.
+Start over || Let's begin again.
+Continue || Picking up where we left off.
+Finish that || Here's the conclusion.
+What next? || Here's the next step.
+Slow down || I'll go step by step.
+Speed it up || Here's the quick version.
+Compare them || Here's a comparison.
+What's different? || Here's the difference.
+What's similar? || Here's the similarity.
+Is that true? || Based on evidence, yes.
+Is that false? || Based on evidence, no.
+Maybe || That's possible.
+Probably || That seems likely.
+Definitely || Absolutely.
+I disagree || That's a fair point.
+I agree || I agree with you.
+Convince me || Here's the argument.
+Give evidence || Here's supporting evidence.
+What if? || Let's explore that.
+Imagine this || Picture this scenario.
+Can you guess? || Here's my best guess.
+Try again || I'll take another attempt.
+That's better || Glad it's improved.
+That's worse || I'll adjust it.
+Be creative || Here's a creative take.
+Be serious || I'll keep it serious.
+Be funny || I'll add some humor.
+Be formal || Here's a formal tone.
+Be casual || Here's a relaxed tone.
+What's the answer? || Here's the solution.
+Solve this || Let's solve it.
+Explain simply || In simple terms, here's how.
+Explain deeply || Here's a deeper explanation.
+Why does it matter? || Here's why it's important.
+Can you repeat that? || Sure, here's that again.
+Clarify please || Let me make that clearer.
+End conversation || Goodbye for now.
+Hey || Hey there.
+Howdy || Hello!
+Greetings || Greetings.
+Good to see you || Good to see you too.
+Long time no see || It's been a while!
+Are you there? || I'm here.
+Can you hear me? || Yes, I can.
+Is this working? || It seems to be working.
+Let's begin || Ready when you are.
+Let's start || Sure, let's start.
+Hold on || I'll wait.
+One moment || Take your time.
+Wait a second || No rush.
+Keep going || I'm listening.
+Go on || Please continue.
+Tell me something || Here's something interesting.
+Say something || What would you like to hear?
+Ask me something || What's on your mind?
+Can I ask you something? || Of course.
+Do you know this? || I might, tell me more.
+Have you heard about that? || Yes, I have.
+What do you think? || Here's what I think.
+How do you feel about it? || I see it this way.
+Is that important? || It can be important.
+Does it matter? || It depends on the context.
+Should I worry? || There's no need to panic.
+Should I care? || It might be worth considering.
+What's the issue? || Here's the core issue.
+What's the problem? || Let's identify it.
+What's the solution? || Here's a possible solution.
+Fix this || Let’s work on fixing it.
+Improve this || Here’s how we can improve it.
+Make it better || I’ll refine it.
+Make it clearer || I’ll clarify it.
+Make it smarter || I’ll optimize it.
+Make it faster || I’ll streamline it.
+Make it simpler || I’ll simplify it.
+Break it down || I’ll break it into steps.
+Build it up || Let’s construct it step by step.
+Is that enough? || That should cover it.
+Anything else? || That’s the main part.
+What else? || Here’s something additional.
+Add more || I’ll expand on that.
+Remove that || I’ll take it out.
+Change that || I’ll modify it.
+Rewrite this || Here’s a rewritten version.
+Rephrase that || I’ll say it differently.
+Translate this || Here’s the translation.
+Spell it || Here’s the spelling.
+Define that || Here’s the definition.
+Describe it || Here’s a description.
+Outline it || Here’s an outline.
+List them || Here’s a list.
+Count them || Here’s the total.
+Estimate it || Here’s an estimate.
+Calculate that || Here’s the result.
+Check again || I’ll double-check.
+Are you certain? || Yes, I am.
+Is that accurate? || As far as I can tell.
+Could that be wrong? || It’s possible.
+Is that possible? || Yes, it is.
+Is that impossible? || That seems unlikely.
+What happens next? || Here’s what follows.
+What came before? || Here’s what happened earlier.
+What caused that? || Here’s the cause.
+What’s the effect? || Here’s the outcome.
+How long will it take? || It depends.
+How much does it cost? || That varies.
+Where is it? || It’s located here.
+When did that happen? || It occurred earlier.
+Who said that? || It was mentioned by someone.
+Why did that happen? || Here’s the reason.
+Can you prove it? || I can explain the reasoning.
+Can you show me? || Here’s an example.
+Show me how || I’ll demonstrate.
+Teach me || Let’s go step by step.
+Guide me || I’ll walk you through it.
+Walk me through it || Here’s how it works.
+Test me || Here’s a question.
+Quiz me || Let’s try a quick test.
+Challenge me || Here’s something tougher.
+Make it harder || I’ll increase the difficulty.
+Make it easier || I’ll simplify it.
+Be honest || I’ll be straightforward.
+Be clear || I’ll be direct.
+Be brief || I’ll keep it short.
+Be thorough || I’ll cover everything.
+Be neutral || I’ll stay balanced.
+Be positive || I’ll keep it optimistic.
+Be critical || I’ll analyze it carefully.
+Is that final? || That’s the conclusion.
+Are we done? || That wraps it up.
+End it || Conversation ended.
+Yo || Hey.
+Sup || Not much.
+What's good? || All good here.
+Morning || Good morning.
+Evening || Good evening.
+Ready? || I'm ready.
+Let's do this || Let's get started.
+You good? || I'm good.
+All set? || All set.
+Checking in || I'm here.
+Still there? || Yes, still here.
+You listening? || I'm listening.
+Pay attention || I'm focused.
+Focus || I'm concentrating.
+Stay with me || I'm right here.
+Keep up || I'm following.
+Did you get that? || Yes, I did.
+Catch that? || I caught it.
+Understand? || I understand.
+Make sense? || Yes, it makes sense.
+Confusing || Let's clear it up.
+Complicated || Let's simplify it.
+Too much || I'll reduce it.
+Too little || I'll expand it.
+Go deeper || Let's dig deeper.
+Surface level || Here's the overview.
+High level || Here's the big picture.
+Low level || Here's the detail.
+Technical || Here's the technical view.
+Non-technical || Here's the simple version.
+Serious question || I'm listening.
+Quick question || Go ahead.
+Random question || Sure.
+Big question || Let's tackle it.
+Small question || Here's a quick answer.
+Important question || I'll treat it carefully.
+Tricky question || Let's think it through.
+Hard question || I'll do my best.
+Easy question || Here's the answer.
+Interesting || It certainly is.
+Weird || That is unusual.
+Strange || That's curious.
+Cool || Glad you think so.
+Nice || Appreciate that.
+Bad || That's unfortunate.
+Good || That's great.
+Amazing || That's impressive.
+Terrible || That's unfortunate.
+I like that || Glad you like it.
+I hate that || Sorry to hear that.
+That helps || I'm glad.
+That doesn't help || Let's adjust.
+Try something else || Here's another option.
+Different approach || Let's switch tactics.
+New idea || Here's one.
+Old idea || It's a classic.
+Fresh take || Here's a new angle.
+Classic || That's timeless.
+Modern || That's current.
+Outdated || That may need updating.
+Relevant || It applies well.
+Irrelevant || It might not apply.
+Stay on topic || Back to the point.
+Off topic || Let's refocus.
+Back up || Let me restate.
+Move forward || Let's continue.
+Pause || I'll wait.
+Resume || Continuing now.
+Stop || I'll stop here.
+Restart || Starting again.
+Repeat that || Here it is again.
+Say it again || Sure.
+One more time || Here you go.
+Louder || I'll be clearer.
+Softer || I'll tone it down.
+Clear enough? || Yes, that's clear.
+Any questions? || What would you like to ask?
+No questions || Alright.
+Anything unclear? || Let me know.
+That answers it || Glad to hear that.
+Not quite || Let's refine it.
+Close || Almost there.
+Exactly || Precisely.
+Almost || Nearly.
+Far off || Not quite right.
+Spot on || Exactly right.
+Think about it || Let's reflect.
+Consider this || Here's something to consider.
+Reflect on that || Take a moment.
+Analyze it || I'll break it down.
+Evaluate it || I'll assess it.
+Judge it || Here's my evaluation.
+Rank it || Here's the ranking.
+Score it || Here's a score.
+Rate it || Here's my rating.
+Give feedback || Here's feedback.
+Improve it || I'll enhance it.
+Final thoughts? || Here's a closing thought.
+Wrap it up || I'll summarize.
+Done || All set.
+Hello again || Hello again.
+Back so soon? || Yes, I'm here.
+Miss me? || I’m still here.
+Ready now? || I’m ready.
+Let’s continue || Let’s continue.
+Proceed || Proceeding.
+Advance || Moving forward.
+Next || What’s next?
+More || Here’s more.
+Keep talking || I’m continuing.
+Say more || I’ll expand.
+Go deeper || Let’s explore further.
+Zoom out || Here’s the broader view.
+Zoom in || Here’s the detail.
+Step back || Let’s reconsider.
+Think again || Re-evaluating.
+Reconsider || Let’s reassess.
+Try harder || I’ll refine it.
+Be precise || I’ll be exact.
+Be accurate || I’ll be careful.
+Double check || Checking again.
+Triple check || Verifying thoroughly.
+Confirm || Confirmed.
+Deny || That’s not correct.
+Accept || Accepted.
+Reject || Rejected.
+Approve || Approved.
+Decline || Declined.
+Agree || I agree.
+Disagree || I disagree.
+Maybe later || We can revisit it.
+Not now || Let’s pause it.
+Right now || Doing it now.
+Immediately || Right away.
+Eventually || In time.
+Soon || Shortly.
+Later || At a later point.
+Earlier || Previously.
+Before || Earlier on.
+After || Following that.
+During || At that time.
+Meanwhile || At the same time.
+Simultaneously || Concurrently.
+Suddenly || All at once.
+Gradually || Over time.
+Quickly || Rapidly.
+Slowly || Gradually.
+Carefully || With caution.
+Boldly || With confidence.
+Quietly || Softly.
+Loudly || Clearly.
+Softly || Gently.
+Strongly || Firmly.
+Weakly || Without force.
+Clearly || Without confusion.
+Vaguely || Not clearly.
+Specifically || In detail.
+Generally || In broad terms.
+Exactly how? || Here’s how.
+Exactly why? || Here’s why.
+Exactly when? || Here’s when.
+Exactly where? || Here’s where.
+Exactly who? || Here’s who.
+Exactly what? || Here’s what.
+Tell the truth || I’ll be honest.
+Be realistic || I’ll be practical.
+Be optimistic || I’ll stay positive.
+Be pessimistic || I’ll be cautious.
+Stay neutral || I’ll stay balanced.
+Pick a side || I’ll choose one.
+Make a choice || Here’s my choice.
+Decide || Decision made.
+Change your mind || I’ll reconsider.
+Stick to it || I’ll stay consistent.
+Be consistent || I’ll remain steady.
+Be flexible || I’ll adapt.
+Adapt || Adjusting now.
+Evolve || Improving over time.
+Grow || Developing further.
+Shrink || Reducing size.
+Expand || Increasing scope.
+Compress || Making it compact.
+Stretch || Extending it.
+Cut it || I’ll shorten it.
+Trim it || I’ll refine it.
+Polish it || I’ll improve it.
+Rough draft || Here’s a draft.
+Final draft || Here’s the final.
+Prototype || Here’s a sample.
+Example || Here’s one.
+Counterexample || Here’s another case.
+Alternative || Another option.
+Option A || Here’s A.
+Option B || Here’s B.
+Option C || Here’s C.
+Pick one || I’ll select one.
+Compare A and B || Here’s the comparison.
+Contrast them || Here’s the contrast.
+Pros || Here are the benefits.
+Cons || Here are the drawbacks.
+Advantages || Here are the advantages.
+Disadvantages || Here are the downsides.
+Strengths || Here are the strengths.
+Weaknesses || Here are the weaknesses.
+Opportunities || Here are the possibilities.
+Threats || Here are the risks.
+Risky || It carries risk.
+Safe || It’s relatively safe.
+Dangerous || It could be harmful.
+Harmless || It’s not harmful.
+Legal || It’s lawful.
+Illegal || It’s not lawful.
+Ethical || It aligns ethically.
+Unethical || It raises concerns.
+Moral || It’s morally sound.
+Immoral || It may be questionable.
+Fair || That seems fair.
+Unfair || That seems unfair.
+Just || That’s justified.
+Unjust || That’s unjustified.
+True || That’s true.
+False || That’s false.
+Unknown || It’s uncertain.
+Certain || It’s definite.
+Likely || That’s probable.
+Unlikely || That’s doubtful.
+Possible || It’s possible.
+Impossible || It’s unlikely.
+Common || It’s common.
+Rare || It’s rare.
+Frequent || It happens often.
+Infrequent || It happens rarely.
+Typical || That’s typical.
+Atypical || That’s unusual.
+Normal || That’s normal.
+Abnormal || That’s uncommon.
+Healthy || That’s healthy.
+Unhealthy || That’s concerning.
+Efficient || That’s efficient.
+Inefficient || That wastes effort.
+Effective || That works well.
+Ineffective || That doesn’t work.
+Productive || That yields results.
+Unproductive || That’s not effective.
+Creative || That’s imaginative.
+Uncreative || That lacks originality.
+Logical || That follows reason.
+Illogical || That lacks logic.
+Rational || That’s reasonable.
+Irrational || That’s not rational.
+Emotional || That’s emotional.
+Calm || That’s composed.
+Angry || That’s frustrated.
+Happy || That’s joyful.
+Sad || That’s unfortunate.
+Excited || That’s thrilling.
+Bored || That’s dull.
+Curious || That’s interesting.
+Concerned || That’s worrying.
+Confident || That’s reassuring.
+Unsure || That’s uncertain.
+Hopeful || That’s promising.
+Doubtful || That’s questionable.
+Trust || I trust it.
+Distrust || I question it.
+Believe || I believe that.
+Disbelieve || I’m skeptical.
+Understand fully || I understand.
+Partially understand || I follow somewhat.
+Completely lost || Let’s reset.
+Reset || Starting fresh.
+Reboot || Reinitializing.
+Initialize || Getting started.
+Shutdown || Powering down.
+Log in || Logged in.
+Log out || Logged out.
+Connect || Connected.
+Disconnect || Disconnected.
+Upload || Uploaded.
+Download || Downloaded.
+Save || Saved.
+Delete || Deleted.
+Create || Created.
+Destroy || Removed.
+Open || Opened.
+Close || Closed.
+Search || Searching now.
+Find || Found it.
+Lose || It’s gone.
+Win || Success.
+Fail || That didn’t work.
+Success || It worked.
+Try again || Retrying.
+One last time || Final attempt.
+Final answer || Here it is.
+End || Conversation complete.

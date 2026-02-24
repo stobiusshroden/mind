@@ -1,0 +1,25 @@
+cd C:\Users\shrod\Desktop\mind
+
+.\.venv\Scripts\activate
+
+python -m uvicorn hybrid_reservoir_service:app --reload
+
+pip install transformers torch
+
+from openai import OpenAI
+
+# IMPORTANT: do not hardcode API keys in files committed to git.
+# Set OPENAI_API_KEY in your environment, then:
+client = OpenAI()  # uses OPENAI_API_KEY
+
+print(client.models.list())
+
+bridge.cmd = C:\Users\shrod\Desktop\mind\openclaw_bridge\run_bridge.cmd
+
+>.venv\Scripts\python.exe -m http.server 8080
+
+>.venv\Scripts\python.exe -m uvicorn hybrid_reservoir_service:app --host 127.0.0.1 --port 8000
+
+C:\Users\shrod\Desktop\mind\start_all.cmd
+
+Stop:  C:\Users\shrod\Desktop\mind\stop_all.cmd,
