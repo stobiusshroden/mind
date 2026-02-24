@@ -1,3 +1,5 @@
+Latest release: https://github.com/stobiusshroden/mind/releases/tag/v0.1.0
+
 # mind
 
 Hybrid conversational system + OpenClaw-style bridge + Dynasty v19 live reservoir (SSE metrics + bounded plasticity).
