@@ -61,3 +61,17 @@ dynasty_mark {"label":"run-start","note":"baseline"}
 
 ## License
 MIT (see `LICENSE`).
+
+mind combines two parallel projects into one modular architecture:
+
+1) Dynasty v19 — a mathematically clean, bounded nonlinear reservoir (Duffing‑style oscillator + slow memory S4) with quadratic readout and online LMS.
+2) Hybrid — a FastAPI conversational system that governs capability use via an explicit, allowlisted skill bridge (jobs + SSE).
+
+You can run Dynasty continuously (n=0) and stream RMS/eRMS and γ/Δγ live in the UI, including optional slow bounded bidirectional plasticity over damping.
+
+start_all.cmd
+# open http://127.0.0.1:8000/ui/chat.html
+dynasty_preset {"name":"bidirectional-default"}
+dynasty_step {"n":0,"emitEvery":500}
+
+dynasty_cancel
