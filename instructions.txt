@@ -8,9 +8,7 @@ pip install transformers torch
 
 from openai import OpenAI
 
-# IMPORTANT: do not hardcode API keys in files committed to git.
-# Set OPENAI_API_KEY in your environment, then:
-client = OpenAI()  # uses OPENAI_API_KEY
+client = OpenAI(api_key="sk-REDACTED_SET_YOUR_OWN_KEY")
 
 print(client.models.list())
 
@@ -23,3 +21,9 @@ bridge.cmd = C:\Users\shrod\Desktop\mind\openclaw_bridge\run_bridge.cmd
 C:\Users\shrod\Desktop\mind\start_all.cmd
 
 Stop:  C:\Users\shrod\Desktop\mind\stop_all.cmd,
+
+
+cd /d C:\Users\shrod\Desktop\mind\openclaw_bridge
+python -m uvicorn bridge:app --host 127.0.0.1 --port 17171
+
+setx OPENAI_API_KEY "sk-REDACTED_SET_YOUR_OWN_KEY"

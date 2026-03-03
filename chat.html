@@ -170,6 +170,27 @@
             } catch (_) {}
         });
 
+        es.addEventListener("relay_pending", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                showRelay(payload);
+            } catch (_) {
+                showRelay(null);
+            }
+        });
+
+        es.addEventListener("major_reply", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                const v = (payload && payload.verified) ? 'VERIFIED' : 'UNVERIFIED';
+                const from = payload.from || 'Major-daemon';
+                const text = payload.text || JSON.stringify(payload);
+                addMessage("assistant", `[${from}→Tachikoma] (${v}) ${text}`);
+            } catch (_) {
+                addMessage("assistant", "[Major-daemon→Tachikoma] (reply received)");
+            }
+        });
+
         es.onerror = () => {
             // auto-reconnect is built-in; keep UI calm
         };
@@ -201,6 +222,24 @@
     dynastyBar.style.backgroundColor = '#203a82';
     dynastyBar.textContent = '[dynasty] (no metrics yet)';
     chatContainer.appendChild(dynastyBar);
+
+    // Relay badge (Tachikoma -> The Major outbox)
+    let relayCount = 0;
+    const relayBar = document.createElement('div');
+    relayBar.className = 'message assistant';
+    relayBar.style.opacity = '0.90';
+    relayBar.style.fontSize = '12px';
+    relayBar.style.backgroundColor = '#4a2b2b';
+    relayBar.style.display = 'none';
+    relayBar.textContent = '[relay]';
+    chatContainer.appendChild(relayBar);
+
+    function showRelay(payload) {
+        relayCount += 1;
+        const prev = (payload && payload.preview) ? payload.preview.replace(/\s+/g, ' ').slice(0, 120) : '';
+        relayBar.style.display = 'block';
+        relayBar.textContent = `[relay→Major] queued x${relayCount}` + (prev ? ` — "${prev}"` : '') + ` | tell The Major: check relay`;
+    }
 
     async function sendMessage() {
         const userInput = inputField.value.trim();

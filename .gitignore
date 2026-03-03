@@ -20,6 +20,13 @@ behavior_state/
 openclaw_bridge/artifacts/
 openclaw_bridge/__pycache__/
 
+# Relay (local opsec + message outboxes; never commit)
+relay/
+**/hmac_key.txt
+**/to_major.jsonl
+**/to_tachikoma.jsonl
+**/state.json
+
 # OS/editor
 .DS_Store
 Thumbs.db
@@ -30,3 +37,4 @@ Thumbs.db
 
 # Logs
 *.log
+instructions.local.txt
