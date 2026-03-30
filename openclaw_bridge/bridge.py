@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
+import requests
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -26,6 +28,28 @@ DEFAULT_DYNASTY_FILE = "manifold-swarm-dynasty-v19-clean.html"
 
 MANIFEST_PATH = Path(__file__).with_name("skills_manifest.json")
 ARTIFACTS_DIR = Path(__file__).with_name("artifacts")
+
+
+# -----------------------------
+# PinchTab integration (Major-owned; allowlisted)
+# -----------------------------
+PINCHTAB_BASE = os.environ.get('PINCHTAB_BASE', 'http://127.0.0.1:9867')
+
+
+def _pinchtab_base() -> str:
+    return PINCHTAB_BASE.rstrip('/')
+
+
+def _pinchtab_get(path: str, params: dict | None = None) -> tuple[int, str]:
+    url = _pinchtab_base() + path
+    r = requests.get(url, params=params, timeout=30)
+    return r.status_code, r.text
+
+
+def _pinchtab_post(path: str, body: dict | None = None) -> tuple[int, str]:
+    url = _pinchtab_base() + path
+    r = requests.post(url, json=body or {}, timeout=60)
+    return r.status_code, r.text
 
 
 class SkillInvokeRequest(BaseModel):
@@ -139,6 +163,8 @@ class DynastyState:
         self.plastic_E_high = 1e9
         self.gamma_min = 0.0
         self.gamma_max = 0.2
+        # small bounded exploration noise on gamma (optional)
+        self.jitterSigma = 0.0
         self._ema_rms: Optional[float] = None
         self._prev_ema_rms: Optional[float] = None
         self._prev_E: Optional[float] = None
@@ -257,6 +283,13 @@ class DynastyState:
 
             self.gamma = max(self.gamma_min, min(self.gamma_max, self.gamma + dgamma))
 
+        # optional micro-jitter to keep gamma from pinning (bounded)
+        jitter = 0.0
+        if self.jitterSigma and self.jitterSigma > 0.0:
+            import random
+            jitter = random.uniform(-self.jitterSigma, self.jitterSigma)
+            self.gamma = max(self.gamma_min, min(self.gamma_max, self.gamma + jitter))
+
         self._prev_E = E
         self.t += 1
 
@@ -273,7 +306,10 @@ class DynastyState:
             "S4": self.S4,
             "E": E,
             "gamma": self.gamma,
+            "jitterSigma": self.jitterSigma,
+            "rmsWindow": self.rmsWindow,
             "dgamma": dgamma,
+            "jitter": jitter,
         }
 
     def snapshot(self, include_weights: bool = True) -> Dict[str, Any]:
@@ -290,7 +326,8 @@ class DynastyState:
             "gamma": self.gamma,
             "eta": self.eta,
             "delay": self.delay,
-            "rms": self._update_rms(0.0) if self._errBuf else 0.0,
+            # Note: snapshot must NOT mutate the rolling RMS buffer.
+            "rms": (float(__import__("math").sqrt(max(0.0, self._errSumSq / len(self._errBuf)))) if self._errBuf else 0.0),
             "ema_rms": self._ema_rms,
             "plasticity": {
                 "enabled": self.plastic_enabled,
@@ -411,11 +448,215 @@ async def _run_internal(job: Job, skill: dict) -> None:
                 st.gamma_max, st.gamma_min = st.gamma_min, st.gamma_max
             st.gamma = max(st.gamma_min, min(st.gamma_max, st.gamma))
 
+
+    # ---- PinchTab skills ----
+    if job.skill == "pinchtab_health":
+        code, text = await asyncio.to_thread(_pinchtab_get, "/health", None)
+        job.result = {"status_code": code, "text": text.strip()}
+        job.status = "succeeded" if 200 <= code < 300 else "failed"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status, "status_code": code})
+        return
+
+    if job.skill == "pinchtab_instance_create":
+        body = {"profile": str(job.args.get("profile", "default"))}
+        code, text = await asyncio.to_thread(_pinchtab_post, "/instances", body)
+        # PinchTab returns JSON; try parse
+        try:
+            payload = json.loads(text)
+        except Exception:
+            payload = {"raw": text}
+        job.result = {"status_code": code, "response": payload}
+        job.status = "succeeded" if 200 <= code < 300 else "failed"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status, "status_code": code})
+        return
+
+    if job.skill == "pinchtab_snapshot":
+        iid = str(job.args.get("instanceId"))
+        flt = str(job.args.get("filter", "interactive"))
+        code, text = await asyncio.to_thread(_pinchtab_get, f"/instances/{iid}/snapshot", {"filter": flt})
+        try:
+            payload = json.loads(text)
+        except Exception:
+            payload = {"raw": text}
+        job.result = {"status_code": code, "snapshot": payload}
+        job.status = "succeeded" if 200 <= code < 300 else "failed"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status, "status_code": code})
+        return
+
+    if job.skill == "pinchtab_action":
+        iid = str(job.args.get("instanceId"))
+        action = job.args.get("action") or {}
+        code, text = await asyncio.to_thread(_pinchtab_post, f"/instances/{iid}/action", action)
+        try:
+            payload = json.loads(text)
+        except Exception:
+            payload = {"raw": text}
+        job.result = {"status_code": code, "response": payload}
+        job.status = "succeeded" if 200 <= code < 300 else "failed"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status, "status_code": code})
+        return
+
+    if job.skill == "pinchtab_text":
+        iid = str(job.args.get("instanceId"))
+        # Try instance-scoped text first; fallback to /text?tabId=
+        code, text = await asyncio.to_thread(_pinchtab_get, f"/instances/{iid}/text", None)
+        if not (200 <= code < 300):
+            code, text = await asyncio.to_thread(_pinchtab_get, "/text", {"tabId": iid})
+        job.result = {"status_code": code, "text": text}
+        job.status = "succeeded" if 200 <= code < 300 else "failed"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status, "status_code": code})
+        return
+
     if job.skill == "dynasty_status":
         st = _dynasty_get(session_id)
         include_w = bool(job.args.get("includeWeights", True))
         job.result = {"sessionId": session_id, "state": st.snapshot(include_weights=include_w)}
         job.status = "succeeded"
+        job.endedAt = time.time()
+        await _emit(job, "lifecycle", {"status": job.status})
+        return
+
+    if job.skill == "dynasty_geometry_probe":
+        st = _dynasty_get(session_id)
+        apply_dynasty_overrides(st, job.args)
+
+        steps = int(job.args.get("steps", 5000))
+        sample_every = int(job.args.get("sampleEvery", 10))
+        include_w = bool(job.args.get("includeWeights", True))
+        pca_target = float(job.args.get("pcaVariance", 0.95))
+        r_bins = int(job.args.get("rBins", 12))
+
+        artifacts_dir = Path(job.artifactsDir)
+        samples_path = artifacts_dir / "geometry_samples.json"
+        summary_path = artifacts_dir / "geometry_summary.json"
+
+        # Collect samples by advancing Dynasty (this mutates the session state).
+        samples: List[Dict[str, Any]] = []
+        last = None
+        for i in range(steps):
+            if job.status == "canceled":
+                break
+            last = st.step_once()
+            if (i % sample_every) == 0 or i == (steps - 1):
+                rec = {
+                    "i": i,
+                    "t": last.get("t"),
+                    "E": last.get("E"),
+                    "rms": last.get("rms"),
+                    "ema_rms": last.get("ema_rms"),
+                    "gamma": last.get("gamma"),
+                    "dgamma": last.get("dgamma"),
+                    "q": last.get("q"),
+                    "p": last.get("p"),
+                    "S4": last.get("S4"),
+                }
+                if include_w:
+                    rec["w"] = list(st.w)
+                samples.append(rec)
+
+            if (i % 2000) == 0:
+                await asyncio.sleep(0)
+
+        samples_path.write_text(json.dumps({"sessionId": session_id, "samples": samples}), encoding="utf-8")
+
+        # Build numeric matrix for analysis
+        import numpy as np
+        vecs = []
+        for s in samples:
+            v = [
+                float(s.get("q") or 0.0),
+                float(s.get("p") or 0.0),
+                float(s.get("S4") or 0.0),
+                float(s.get("E") or 0.0),
+                float(s.get("rms") or 0.0),
+                float(s.get("ema_rms") or 0.0),
+                float(s.get("gamma") or 0.0),
+                float(s.get("dgamma") or 0.0),
+            ]
+            if include_w:
+                w = s.get("w") or []
+                v.extend([float(x or 0.0) for x in w])
+            vecs.append(v)
+
+        X = np.asarray(vecs, dtype=float)
+        geom = {"nSamples": int(X.shape[0]), "dim": int(X.shape[1])}
+
+        if X.shape[0] >= 3:
+            # PCA intrinsic dimension (variance target)
+            Xc = X - X.mean(axis=0, keepdims=True)
+            # SVD on samples x dims
+            U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+            # explained variance proportional to S^2
+            ev = (S * S)
+            evr = ev / (ev.sum() + 1e-12)
+            cum = np.cumsum(evr)
+            k = int(np.searchsorted(cum, pca_target) + 1)
+            geom["pca_target"] = pca_target
+            geom["pca_k"] = k
+            geom["pca_evr"] = [float(x) for x in evr[: min(len(evr), 12)]]
+
+            # Correlation-dimension style slope on pairwise distances
+            # Compute condensed distances for sampling
+            dists = []
+            for a in range(X.shape[0]):
+                for b in range(a + 1, X.shape[0]):
+                    d = float(np.linalg.norm(X[a] - X[b]))
+                    if d > 0:
+                        dists.append(d)
+            dists = np.asarray(dists, dtype=float)
+            if dists.size >= 10:
+                dmin = float(np.percentile(dists, 5))
+                dmax = float(np.percentile(dists, 95))
+                if dmax > dmin > 0:
+                    rs = np.logspace(np.log10(dmin), np.log10(dmax), num=max(3, r_bins))
+                    counts = []
+                    for r0 in rs:
+                        counts.append(float((dists <= r0).mean()))
+                    # Fit slope in the middle third (avoid extremes)
+                    lo = len(rs) // 3
+                    hi = 2 * len(rs) // 3
+                    xx = np.log(rs[lo:hi])
+                    yy = np.log(np.asarray(counts[lo:hi]) + 1e-12)
+                    if xx.size >= 2:
+                        slope = float(np.polyfit(xx, yy, 1)[0])
+                        geom["corr_dim"] = slope
+                        geom["corr_r"] = [float(x) for x in rs]
+                        geom["corr_c"] = [float(x) for x in counts]
+
+        summary_path.write_text(json.dumps({"sessionId": session_id, "geometry": geom}, indent=2), encoding="utf-8")
+
+        # Stream a compact geometry event for Tachikoma UI
+        await _emit(job, "geometry", {
+            "sessionId": session_id,
+            "t": st.t,
+            "geometry": {
+                "pca_k": geom.get("pca_k"),
+                "pca_target": geom.get("pca_target"),
+                "corr_dim": geom.get("corr_dim"),
+                "nSamples": geom.get("nSamples"),
+                "dim": geom.get("dim"),
+            },
+        })
+
+        job.result = {
+            "sessionId": session_id,
+            "ok": True,
+            "steps": steps,
+            "sampleEvery": sample_every,
+            "includeWeights": include_w,
+            "artifacts": {
+                "samples": str(samples_path),
+                "summary": str(summary_path),
+            },
+            "geometry": geom,
+            "state": st.snapshot(include_weights=False),
+        }
+        job.status = "succeeded" if job.status != "canceled" else "canceled"
         job.endedAt = time.time()
         await _emit(job, "lifecycle", {"status": job.status})
         return
@@ -592,6 +833,21 @@ async def _run_internal(job: Job, skill: dict) -> None:
                     "EHigh": 1e9,
                 }
             },
+            "bidirectional-fluctuating": {
+                "gamma": 0.05,
+                "rmsWindow": 500,
+                "jitterSigma": 5e-4,
+                "plasticity": {
+                    "enabled": True,
+                    "mu": 5e-3,
+                    "emaAlpha": 0.01,
+                    "eps": 0.0,
+                    "relax": 1.2,
+                    "gammaMin": 0.005,
+                    "gammaMax": 0.5,
+                    "EHigh": 1e9
+                }
+            },
         }
 
         if name not in presets:
@@ -606,6 +862,10 @@ async def _run_internal(job: Job, skill: dict) -> None:
         if apply:
             if "gamma" in preset:
                 st.gamma = float(preset["gamma"])
+            if "jitterSigma" in preset:
+                st.jitterSigma = float(preset["jitterSigma"])
+            if "rmsWindow" in preset:
+                st.rmsWindow = int(preset["rmsWindow"])
 
             plast = preset.get("plasticity")
             if isinstance(plast, dict):

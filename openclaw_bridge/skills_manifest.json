@@ -8,7 +8,10 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "includeWeights": { "type": "boolean", "default": true }
+          "includeWeights": {
+            "type": "boolean",
+            "default": true
+          }
         },
         "additionalProperties": false
       }
@@ -20,34 +23,116 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "n": { "type": "integer", "minimum": 0, "maximum": 500000, "description": "0 = continuous until canceled" },
-          "emitEvery": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 50 },
-          "includeWeights": { "type": "boolean", "default": false },
-          "learning": { "type": "boolean" },
-          "dt": { "type": "number", "minimum": 1e-6, "maximum": 1.0 },
-          "omega": { "type": "number", "minimum": 1e-6, "maximum": 10.0 },
-          "beta": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-          "gamma": { "type": "number", "minimum": 0.0, "maximum": 10.0, "description": "Oscillator damping coefficient" },
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500000,
+            "description": "0 = continuous until canceled"
+          },
+          "emitEvery": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 50
+          },
+          "includeWeights": {
+            "type": "boolean",
+            "default": false
+          },
+          "learning": {
+            "type": "boolean"
+          },
+          "dt": {
+            "type": "number",
+            "minimum": 1e-06,
+            "maximum": 1.0
+          },
+          "omega": {
+            "type": "number",
+            "minimum": 1e-06,
+            "maximum": 10.0
+          },
+          "beta": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 10.0
+          },
+          "gamma": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 10.0,
+            "description": "Oscillator damping coefficient"
+          },
           "plasticity": {
             "type": "object",
             "properties": {
-              "enabled": { "type": "boolean" },
-              "mu": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Plasticity step size for gamma" },
-              "emaAlpha": { "type": "number", "minimum": 0.000001, "maximum": 0.5, "description": "EMA smoothing for RMS" },
-              "gammaMin": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-              "gammaMax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-              "eps": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Deadband for EMA(RMS) delta" },
-              "relax": { "type": "number", "minimum": 0.0, "maximum": 10.0, "description": "Multiplier for decreasing gamma when RMS improves" },
-              "EHigh": { "type": "number", "minimum": 0.0, "maximum": 1000000000000.0, "description": "If E exceeds this, force gamma to increase" }
+              "enabled": {
+                "type": "boolean"
+              },
+              "mu": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Plasticity step size for gamma"
+              },
+              "emaAlpha": {
+                "type": "number",
+                "minimum": 1e-06,
+                "maximum": 0.5,
+                "description": "EMA smoothing for RMS"
+              },
+              "gammaMin": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "gammaMax": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "eps": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Deadband for EMA(RMS) delta"
+              },
+              "relax": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0,
+                "description": "Multiplier for decreasing gamma when RMS improves"
+              },
+              "EHigh": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1000000000000.0,
+                "description": "If E exceeds this, force gamma to increase"
+              }
             },
             "additionalProperties": false
           },
-          "eta": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-          "delay": { "type": "integer", "minimum": 0, "maximum": 100000 },
-          "reset": { "type": "boolean", "default": false },
-          "seed": { "type": "integer" }
+          "eta": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "delay": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "reset": {
+            "type": "boolean",
+            "default": false
+          },
+          "seed": {
+            "type": "integer"
+          }
         },
-        "required": ["n"],
+        "required": [
+          "n"
+        ],
         "additionalProperties": false
       }
     },
@@ -58,7 +143,10 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "jobId": { "type": "string", "description": "Optional. If omitted, cancel latest running job for this session." }
+          "jobId": {
+            "type": "string",
+            "description": "Optional. If omitted, cancel latest running job for this session."
+          }
         },
         "additionalProperties": false
       }
@@ -70,10 +158,16 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "label": { "type": "string" },
-          "note": { "type": "string" }
+          "label": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
         },
-        "required": ["label"],
+        "required": [
+          "label"
+        ],
         "additionalProperties": false
       }
     },
@@ -84,10 +178,21 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "name": { "type": "string", "enum": ["bidirectional-default", "baseline"] },
-          "apply": { "type": "boolean", "default": true }
+          "name": {
+            "type": "string",
+            "enum": [
+              "bidirectional-default",
+              "baseline"
+            ]
+          },
+          "apply": {
+            "type": "boolean",
+            "default": true
+          }
         },
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "additionalProperties": false
       }
     },
@@ -98,32 +203,152 @@
       "argsSchema": {
         "type": "object",
         "properties": {
-          "steps": { "type": "integer", "minimum": 1, "maximum": 5000000, "default": 200000 },
-          "sampleEvery": { "type": "integer", "minimum": 1, "maximum": 100000, "default": 200 },
-          "includeWeights": { "type": "boolean", "default": true },
-          "reset": { "type": "boolean", "default": false },
-          "seed": { "type": "integer" },
-
-          "learning": { "type": "boolean" },
-          "dt": { "type": "number", "minimum": 1e-6, "maximum": 1.0 },
-          "omega": { "type": "number", "minimum": 1e-6, "maximum": 10.0 },
-          "beta": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-          "gamma": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-          "eta": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-          "delay": { "type": "integer", "minimum": 0, "maximum": 100000 },
+          "steps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000000,
+            "default": 200000
+          },
+          "sampleEvery": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 200
+          },
+          "includeWeights": {
+            "type": "boolean",
+            "default": true
+          },
+          "reset": {
+            "type": "boolean",
+            "default": false
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "learning": {
+            "type": "boolean"
+          },
+          "dt": {
+            "type": "number",
+            "minimum": 1e-06,
+            "maximum": 1.0
+          },
+          "omega": {
+            "type": "number",
+            "minimum": 1e-06,
+            "maximum": 10.0
+          },
+          "beta": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 10.0
+          },
+          "gamma": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 10.0
+          },
+          "eta": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "delay": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
           "plasticity": {
             "type": "object",
             "properties": {
-              "enabled": { "type": "boolean" },
-              "mu": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-              "emaAlpha": { "type": "number", "minimum": 0.000001, "maximum": 0.5 },
-              "eps": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-              "relax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-              "gammaMin": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-              "gammaMax": { "type": "number", "minimum": 0.0, "maximum": 10.0 },
-              "EHigh": { "type": "number", "minimum": 0.0, "maximum": 1000000000000.0 }
+              "enabled": {
+                "type": "boolean"
+              },
+              "mu": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0
+              },
+              "emaAlpha": {
+                "type": "number",
+                "minimum": 1e-06,
+                "maximum": 0.5
+              },
+              "eps": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0
+              },
+              "relax": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "gammaMin": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "gammaMax": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 10.0
+              },
+              "EHigh": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1000000000000.0
+              }
             },
             "additionalProperties": false
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "dynasty_geometry_probe",
+      "description": "Compute a lightweight intrinsic 'geometry probe' over a short Dynasty run segment: PCA intrinsic dimension estimates + correlation-dimension style slope from sampled state vectors. Streams a 'geometry' SSE event and writes artifacts.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200000,
+            "default": 5000,
+            "description": "How many dynasty steps to advance while sampling."
+          },
+          "sampleEvery": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 10,
+            "description": "Sample every N steps."
+          },
+          "includeWeights": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include weights (w) in the sampled vector."
+          },
+          "pcaVariance": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 0.999,
+            "default": 0.95,
+            "description": "PCA cumulative explained variance target for intrinsic dimension estimate."
+          },
+          "rBins": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 30,
+            "default": 12,
+            "description": "How many radius bins to use for the correlation-dimension fit."
           }
         },
         "required": ["steps"],
@@ -175,6 +400,94 @@
           "openclaw status"
         ],
         "timeoutSec": 20
+      }
+    },
+    {
+      "name": "pinchtab_health",
+      "description": "Check PinchTab server health at PINCHTAB_BASE (default http://127.0.0.1:8080).",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pinchtab_instance_create",
+      "description": "Create a PinchTab instance (Chrome session/profile). Returns instanceId.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string",
+            "default": "default"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pinchtab_snapshot",
+      "description": "Get accessibility-first snapshot for an instanceId.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string"
+          },
+          "filter": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "all"
+            ],
+            "default": "interactive"
+          }
+        },
+        "required": [
+          "instanceId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pinchtab_action",
+      "description": "Perform an action on an instanceId (click/type/scroll/navigate/etc). Action schema is passed through as PinchTab action JSON.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "instanceId",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pinchtab_text",
+      "description": "Extract token-efficient page text for an instanceId.",
+      "kind": "internal",
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instanceId"
+        ],
+        "additionalProperties": false
       }
     }
   ]

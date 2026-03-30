@@ -38,3 +38,12 @@ Thumbs.db
 # Logs
 *.log
 instructions.local.txt
+
+# Research/runtime outputs not for clean export
+out/
+bin/
+ui/
+coupled_manifest_*.json
+responses.txt
+training_pairs.txt
+New Text Document.txt

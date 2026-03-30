@@ -38,6 +38,46 @@
             align-self: flex-start;
         }
 
+        #loop-container {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            background-color: #111f36;
+            border-top: 1px solid #1f3557;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        #loop-objective {
+            flex: 1;
+            min-width: 260px;
+            padding: 10px;
+            border-radius: 6px;
+            border: none;
+            font-size: 14px;
+        }
+
+        .loop-btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            background-color: #37598f;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .loop-btn:hover {
+            background-color: #4c74b5;
+        }
+
+        #loop-status {
+            width: 100%;
+            color: #b8c8ef;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+
         #input-container {
             display: flex;
             padding: 10px;
@@ -72,6 +112,18 @@
 
 <div id="chat-container"></div>
 
+<div id="loop-container">
+    <input id="loop-objective" type="text" placeholder="Loop objective..." />
+    <button class="loop-btn" id="loop-set-objective">Set Objective</button>
+    <button class="loop-btn" id="loop-start">Start</button>
+    <button class="loop-btn" id="loop-step">Step Once</button>
+    <button class="loop-btn" id="loop-pause">Pause</button>
+    <button class="loop-btn" id="loop-stop">Stop</button>
+    <button class="loop-btn" id="loop-reset">Reset</button>
+    <button class="loop-btn" id="loop-status-btn">Status</button>
+    <div id="loop-status">[loop] idle</div>
+</div>
+
 <div id="input-container">
     <input id="user-input" type="text" placeholder="Speak calmly..." />
     <button id="send-btn">Send</button>
@@ -81,6 +133,8 @@
     const chatContainer = document.getElementById("chat-container");
     const inputField = document.getElementById("user-input");
     const sendButton = document.getElementById("send-btn");
+    const loopObjective = document.getElementById("loop-objective");
+    const loopStatus = document.getElementById("loop-status");
 
     let conversationHistory = [];
 
@@ -170,6 +224,41 @@
             } catch (_) {}
         });
 
+        es.addEventListener("geometry", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                const base = payload.data || payload;
+                const g = base.geometry || base;
+                const pca = (g.pca_k !== undefined && g.pca_target !== undefined) ? `PCA@${Math.round((g.pca_target||0)*100)}%=${g.pca_k}` : null;
+                const cd = (g.corr_dim !== undefined) ? `corrDim=${Number(g.corr_dim).toFixed(2)}` : null;
+                const ns = (g.nSamples !== undefined) ? `n=${g.nSamples}` : null;
+                const parts = [pca, cd, ns].filter(Boolean);
+                if (parts.length) geometryBar.textContent = `[geometry] ${parts.join(' | ')}`;
+            } catch (_) {}
+        });
+
+        es.addEventListener("multiway", (e) => {
+            try {
+                const payload = JSON.parse(e.data);
+                const base = payload.data || payload;
+                const m = base.multiway || base;
+                const ev = (m.events !== undefined) ? `events=${m.events}` : null;
+                const nodes = (m.nodes !== undefined) ? `nodes=${m.nodes}` : null;
+                const edges = (m.edges !== undefined) ? `edges=${m.edges}` : null;
+                const cap = (m.capped) ? 'capped' : null;
+                const xi = (m.xiMax !== undefined && m.maxK !== undefined) ? `Ξmax=${m.xiMax}@k≤${m.maxK}` : null;
+                const merges = (m.merges !== undefined) ? `merges=${m.merges}` : null;
+                const paths = (m.pathsTotal !== undefined) ? `paths≈${m.pathsTotal}` : null;
+                const H = (m.entropyMaxK !== undefined) ? `H=${Number(m.entropyMaxK).toFixed(2)}` : null;
+                const peak = (m.peakMaxK !== undefined) ? `peak=${Number(m.peakMaxK).toFixed(2)}` : null;
+                const cone = (m.coneMean !== undefined) ? `Ct=${JSON.stringify(m.coneMean)}` : null;
+                const parts = [ev, nodes, edges, xi, merges, paths, H, peak, cone, cap].filter(Boolean);
+                if (parts.length) multiwayBar.textContent = `[multiway] ${parts.join(' | ')}`;
+            } catch (err) {
+                multiwayBar.textContent = `[multiway] handler error: ${err}`;
+            }
+        });
+
         es.addEventListener("relay_pending", (e) => {
             try {
                 const payload = JSON.parse(e.data);
@@ -197,7 +286,6 @@
     }
 
     loadVersions();
-    startEventStream();
 
     function addMessage(role, content) {
         const msg = document.createElement("div");
@@ -218,10 +306,54 @@
     const dynastyBar = document.createElement('div');
     dynastyBar.className = 'message assistant';
     dynastyBar.style.opacity = '0.85';
+
+    // Geometry probe status line (low-rate)
+    const geometryBar = document.createElement('div');
+    geometryBar.className = 'message assistant';
+    geometryBar.style.opacity = '0.75';
+    geometryBar.textContent = '[geometry] (no probe yet)';
+
+    // Multiway status line (low-rate)
+    const multiwayBar = document.createElement('div');
+    multiwayBar.className = 'message assistant';
+    multiwayBar.style.opacity = '0.75';
+    multiwayBar.textContent = '[multiway] (off)';
+
     dynastyBar.style.fontSize = '12px';
     dynastyBar.style.backgroundColor = '#203a82';
     dynastyBar.textContent = '[dynasty] (no metrics yet)';
+    chatContainer.appendChild(multiwayBar);
+    chatContainer.appendChild(geometryBar);
     chatContainer.appendChild(dynastyBar);
+
+    // Prime multiway ticker from the current live JSON (avoids missing the first SSE burst)
+    (async () => {
+        try {
+            multiwayBar.textContent = '[multiway] priming…';
+            const r = await fetch(`/ui/out/openclaw_multiway_live.json?t=${Date.now()}`);
+            if (r.ok) {
+                const g = await r.json();
+                const st = g.stats || {};
+                const ev = (g.events) ? `events=${g.events.length}` : null;
+                const nodes = (g.nodes) ? `nodes=${g.nodes.length}` : null;
+                const edges = (g.edges) ? `edges=${g.edges.length}` : null;
+                const xi = (st.xiMax !== undefined && st.maxK !== undefined) ? `Ξmax=${st.xiMax}@k≤${st.maxK}` : null;
+                const merges = (st.merges !== undefined) ? `merges=${st.merges}` : null;
+                const paths = (st.pathsTotal !== undefined) ? `paths≈${st.pathsTotal}` : null;
+                const H = (st.entropyMaxK !== undefined) ? `H=${Number(st.entropyMaxK).toFixed(2)}` : null;
+                const peak = (st.peakMaxK !== undefined) ? `peak=${Number(st.peakMaxK).toFixed(2)}` : null;
+                const cone = (st.coneMean !== undefined) ? `Ct=${JSON.stringify(st.coneMean)}` : null;
+                const cap = (g.capped) ? 'capped' : null;
+                const parts = [ev, nodes, edges, xi, merges, paths, H, peak, cone, cap].filter(Boolean);
+                if (parts.length) multiwayBar.textContent = `[multiway] ${parts.join(' | ')}`;
+            }
+        } catch (err) {
+            multiwayBar.textContent = `[multiway] prime error: ${err}`;
+        }
+    })();
+
+    // Start SSE only after status bars exist (prevents missed/ignored early events)
+    startEventStream();
 
     // Relay badge (Tachikoma -> The Major outbox)
     let relayCount = 0;
@@ -241,52 +373,60 @@
         relayBar.textContent = `[relay→Major] queued x${relayCount}` + (prev ? ` — "${prev}"` : '') + ` | tell The Major: check relay`;
     }
 
+    async function sendCommand(text, trackInHistory = true) {
+        if (!text) return null;
+        if (trackInHistory) {
+            addMessage("user", text);
+            conversationHistory.push({ role: "user", content: text });
+        }
+        const baseUrl = window.location.origin;
+        const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: sessionId, messages: conversationHistory })
+        });
+        if (!response.ok) throw new Error("Server error: " + response.status);
+        const data = await response.json();
+        const assistantReply = data.choices[0].message.content;
+        addMessage("assistant", assistantReply);
+        conversationHistory.push({ role: "assistant", content: assistantReply });
+        return assistantReply;
+    }
+
     async function sendMessage() {
         const userInput = inputField.value.trim();
         if (!userInput) return;
-
-        addMessage("user", userInput);
-
-        conversationHistory.push({
-            role: "user",
-            content: userInput
-        });
-
         inputField.value = "";
-
         try {
-            const baseUrl = window.location.origin;
-            const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    sessionId: sessionId,
-                    messages: conversationHistory
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error("Server error: " + response.status);
-            }
-
-            const data = await response.json();
-
-            const assistantReply = data.choices[0].message.content;
-
-            addMessage("assistant", assistantReply);
-
-            conversationHistory.push({
-                role: "assistant",
-                content: assistantReply
-            });
-
+            await sendCommand(userInput, true);
         } catch (error) {
             console.error(error);
             addMessage("assistant", "No response received.");
         }
     }
+
+    async function sendLoopCommand(cmd) {
+        try {
+            const reply = await sendCommand(cmd, true);
+            loopStatus.textContent = `[loop] ${reply}`;
+        } catch (error) {
+            console.error(error);
+            loopStatus.textContent = `[loop] error: ${error}`;
+            addMessage("assistant", "No response received.");
+        }
+    }
+
+    document.getElementById("loop-set-objective").addEventListener("click", () => {
+        const text = (loopObjective.value || "").trim();
+        if (!text) return;
+        sendLoopCommand(`/loop objective ${text}`);
+    });
+    document.getElementById("loop-start").addEventListener("click", () => sendLoopCommand(`/loop start`));
+    document.getElementById("loop-step").addEventListener("click", () => sendLoopCommand(`/loop step`));
+    document.getElementById("loop-pause").addEventListener("click", () => sendLoopCommand(`/loop pause`));
+    document.getElementById("loop-stop").addEventListener("click", () => sendLoopCommand(`/loop stop`));
+    document.getElementById("loop-reset").addEventListener("click", () => sendLoopCommand(`/loop reset`));
+    document.getElementById("loop-status-btn").addEventListener("click", () => sendLoopCommand(`/loop status`));
 
     sendButton.addEventListener("click", sendMessage);
 

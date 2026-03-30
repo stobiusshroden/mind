@@ -7,6 +7,8 @@ import numpy as np
 
 from qiskit import QuantumCircuit, transpile
 from qiskit_ibm_runtime import QiskitRuntimeService, Batch, SamplerV2 as Sampler
+from datetime import datetime
+from pathlib import Path
 
 
 # -----------------------------
@@ -359,6 +361,31 @@ def main():
 
     print("\ndone")
 
+    if getattr(args, 'save_manifest', False):
+        try:
+            _write_manifest(manifest)
+        except Exception as e:
+            print('MANIFEST_WRITE_ERROR:', repr(e))
+
+
+
+
+
+
+def _write_manifest(manifest: dict, out_dir: str = None) -> str:
+    """Write manifest JSON to Desktop\mind with a stable name; return path."""
+    import json
+    base_dir = Path(__file__).resolve().parent
+    if out_dir:
+        base_dir = Path(out_dir).resolve()
+    base_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    out_path = base_dir / f'coupled_manifest_{ts}.json'
+    out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
+    print(f'WROTE_MANIFEST: {out_path}')
+    return str(out_path)
+
 
 if __name__ == "__main__":
     main()
+

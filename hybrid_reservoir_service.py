@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import asyncio
+import time
 import hmac
 import hashlib
 import secrets
@@ -20,12 +21,25 @@ from openai import OpenAI
 # Configuration
 # ============================================================
 
-MODEL_NAME = "gpt-4.1-mini"   # Change to gpt-5.2 if desired
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")   # Set MODEL_NAME=qwen2.5:7b for Ollama mode
 MEMORY_FILE = "memory.json"
 
 OPENCLAW_BRIDGE = os.environ.get("OPENCLAW_BRIDGE_URL", "http://127.0.0.1:17171")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "").strip()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip() or "ollama"
 
-client = OpenAI()
+_client_kwargs = {"api_key": OPENAI_API_KEY}
+if OPENAI_BASE_URL:
+    _client_kwargs["base_url"] = OPENAI_BASE_URL
+
+
+def make_client():
+    # Fresh client per request helps avoid stale keep-alive / transport state,
+    # which is especially useful with local Ollama-backed OpenAI-compatible APIs.
+    return OpenAI(timeout=180.0, max_retries=1, **_client_kwargs)
+
+
+client = make_client()
 app = FastAPI()
 
 # Background task handle
@@ -39,9 +53,17 @@ app.mount("/ui", StaticFiles(directory=_UI_DIR, html=False), name="ui")
 # sessionId -> event queue (SSE)
 _session_queues: Dict[str, "asyncio.Queue[dict]"] = {}
 
+# sessionId -> last events to replay on (re)connect (prevents missed first tickers)
+_last_sse: Dict[str, Dict[str, dict]] = {}
+
 # sessionId -> background dynasty auto-run task
 _dynasty_auto_tasks: Dict[str, asyncio.Task] = {}
 _dynasty_auto_cfg: Dict[str, dict] = {}
+
+# sessionId -> multiway live feed task (OpenClaw relay interleavings)
+_multiway_tasks: Dict[str, asyncio.Task] = {}
+_multiway_cfg: Dict[str, dict] = {}
+_multiway_last_sig: Dict[str, str] = {}
 
 # sessionId -> cross-brane transmission gate (stealth toggle)
 _tx_enabled: Dict[str, bool] = {}
@@ -51,7 +73,200 @@ _dynasty_running: Dict[str, bool] = {}
 
 # sessionId -> ring buffer of last N dynasty metrics samples (physiology)
 _dynasty_metrics_buf: Dict[str, deque] = {}
-_DYNASTY_BUF_N = 5
+_DYNASTY_BUF_N = 600  # physiology ring buffer for shadow probes
+
+# sessionId -> controlled recurrence loop state
+_loop_states: Dict[str, dict] = {}
+
+# Cached bridge skill manifest to avoid blocking every request on /skills
+_bridge_skills_cache: Dict[str, Any] = {
+    "skills": [],
+    "fetched_at": 0.0,
+}
+_BRIDGE_SKILLS_TTL_S = 30.0
+
+
+def get_loop_state(session_id: str) -> dict:
+    sid = session_id or "default"
+    state = _loop_states.get(sid)
+    if state is None:
+        state = {
+            "enabled": False,
+            "running": False,
+            "paused": False,
+            "loop_count": 0,
+            "max_loops": 8,
+            "objective": "",
+            "compressed_state": "",
+            "last_output": "",
+            "last_operator": None,
+            "same_operator_streak": 0,
+            "redundancy_score": 0.0,
+            "last_dynasty": {},
+            "last_regime": {},
+            "last_updated": None,
+            "stop_reason": None,
+        }
+        _loop_states[sid] = state
+    return state
+
+
+def reset_loop_state(session_id: str):
+    _loop_states.pop(session_id or "default", None)
+
+
+def reduce_dynasty_regime(snapshot: dict) -> dict:
+    if not isinstance(snapshot, dict):
+        return {
+            "stability": "unknown",
+            "activation": "unknown",
+            "revision_pressure": "unknown",
+            "plasticity": None,
+            "posture": "unknown",
+        }
+
+    def pick(*paths):
+        for path in paths:
+            cur = snapshot
+            ok = True
+            for part in path:
+                if isinstance(cur, dict) and part in cur:
+                    cur = cur[part]
+                else:
+                    ok = False
+                    break
+            if ok and cur is not None:
+                return cur
+        return None
+
+    def f(x):
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    rms = f(pick(("rms",), ("metrics", "rms"), ("state", "rms"), ("snapshot", "rms"), ("result", "state", "rms")))
+    E = f(pick(("E",), ("metrics", "E"), ("state", "E"), ("snapshot", "E"), ("result", "state", "E"), ("energy",)))
+    q = f(pick(("q",), ("state", "q"), ("snapshot", "q"), ("result", "state", "q")))
+    p = f(pick(("p",), ("state", "p"), ("snapshot", "p"), ("result", "state", "p")))
+    S4 = f(pick(("S4",), ("state", "S4"), ("snapshot", "S4"), ("result", "state", "S4")))
+    step_count = pick(("step_count",), ("stepCount",), ("t",), ("state", "t"), ("snapshot", "t"), ("result", "state", "t"))
+    plasticity = pick(("plasticity_enabled",), ("plasticity", "enabled"), ("plasticityEnabled",), ("state", "plasticity_enabled"), ("result", "state", "plasticity", "enabled"))
+
+    stability = "unknown"
+    activation = "unknown"
+    revision_pressure = "low"
+    posture = "unknown"
+
+    if rms is not None:
+        if rms > 0.6:
+            stability = "agitated"
+        elif rms > 0.2:
+            stability = "mixed"
+        else:
+            stability = "stable"
+
+    if E is not None:
+        if E > 0.4:
+            activation = "high"
+        elif E > 0.05:
+            activation = "medium"
+        else:
+            activation = "low"
+
+    if plasticity is False:
+        revision_pressure = "constrained"
+    elif stability == "agitated":
+        revision_pressure = "high"
+    elif stability == "mixed":
+        revision_pressure = "medium"
+    else:
+        revision_pressure = "low"
+
+    if activation == "low" and stability == "stable":
+        posture = "watchful"
+    elif activation == "medium" and stability == "stable":
+        posture = "ready"
+    elif activation == "high" and stability == "stable":
+        posture = "charged"
+    elif stability == "agitated":
+        posture = "turbulent"
+    elif stability == "mixed":
+        posture = "shifting"
+
+    return {
+        "stability": stability,
+        "activation": activation,
+        "revision_pressure": revision_pressure,
+        "plasticity": plasticity,
+        "posture": posture,
+        "step_count": step_count,
+        "q": q,
+        "p": p,
+        "S4": S4,
+        "E": E,
+        "rms": rms,
+    }
+
+
+def choose_loop_operator(state: dict, regime: dict) -> str:
+    stability = regime.get("stability")
+    revision_pressure = regime.get("revision_pressure")
+    if stability == "agitated":
+        op = "stabilize"
+    elif revision_pressure in ("high", "constrained"):
+        op = "revise"
+    else:
+        op = "extend"
+    if state.get("last_operator") == op:
+        state["same_operator_streak"] = state.get("same_operator_streak", 0) + 1
+    else:
+        state["same_operator_streak"] = 0
+    if state["same_operator_streak"] >= 2:
+        if op == "extend":
+            op = "revise"
+        elif op == "revise":
+            op = "stabilize"
+    return op
+
+
+def build_loop_prompt(objective: str, compressed_state: str, regime: dict, operator: str) -> str:
+    regime_summary = json.dumps(regime, ensure_ascii=False)
+    return f"""You are performing one controlled internal recurrence step.\n\nObjective:\n{objective or '(unset objective)'}\n\nCurrent compressed state:\n{compressed_state or '(empty)'}\n\nDynasty regime:\n{regime_summary}\n\nOperator:\n{operator}\n\nRules:\n- Return valid JSON only.\n- Do not ask the user questions.\n- Do not expand scope.\n- Keep continuity with the prior state unless revision is required.\n- Be concise.\n\nReturn exactly this schema:\n{{\n  \"updated_state\": \"short updated working state\",\n  \"rationale\": \"one short sentence\",\n  \"continue_hint\": \"continue\"\n}}"""
+
+
+def parse_loop_json(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except Exception:
+        return {
+            "updated_state": (text or "").strip()[:1000],
+            "rationale": "fallback parse path",
+            "continue_hint": "continue",
+            "_parse_error": True,
+        }
+
+
+def compute_redundancy(prev_state: str, next_state: str) -> float:
+    try:
+        from difflib import SequenceMatcher
+        prev_state = (prev_state or "").strip()
+        next_state = (next_state or "").strip()
+        if not prev_state or not next_state:
+            return 0.0
+        return SequenceMatcher(None, prev_state, next_state).ratio()
+    except Exception:
+        return 0.0
+
+
+def should_stop_loop(state: dict):
+    if state.get("paused"):
+        return True, "paused"
+    if state.get("loop_count", 0) >= state.get("max_loops", 8):
+        return True, "max_loops"
+    if state.get("redundancy_score", 0.0) >= 0.97:
+        return True, "redundancy"
+    return False, None
 
 # Relay outbox: Tachikoma can write a relay packet for The Major.
 _RELAY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "relay")
@@ -72,6 +287,8 @@ app.add_middleware(
         "http://localhost:8080",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
+        "http://127.0.0.1:8766",
+        "http://localhost:8766",
         "http://127.0.0.1",
         "http://localhost",
     ],
@@ -231,18 +448,346 @@ Energy: {emotional_state.get("energy")}
 async def _sse_emit(session_id: str, event: str, data: Any) -> None:
     if not session_id:
         return
+
+    # stash latest event payload for replay on reconnect
+    try:
+        _last_sse.setdefault(session_id, {})[event] = {"event": event, "data": data, "ts": datetime.datetime.utcnow().isoformat()}
+    except Exception:
+        pass
+
     q = _session_queues.get(session_id)
     if not q:
         return
     await q.put({"event": event, "data": data, "ts": datetime.datetime.utcnow().isoformat()})
 
 
-async def _get_bridge_skills() -> List[dict]:
-    async with httpx.AsyncClient(timeout=10.0) as hx:
-        r = await hx.get(f"{OPENCLAW_BRIDGE}/skills")
-        r.raise_for_status()
-        payload = r.json()
-        return payload.get("skills", [])
+def _relay_jsonl_paths() -> List[str]:
+    return [
+        os.path.join(_RELAY_DIR, "to_major.jsonl"),
+        os.path.join(_RELAY_DIR, "to_tachikoma.jsonl"),
+    ]
+
+
+def _read_jsonl(path: str) -> List[dict]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return []
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+def _parse_ts_iso(ts: str) -> float:
+    ts = (ts or "").strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    return datetime.datetime.fromisoformat(ts).timestamp()
+
+
+async def _compute_openclaw_multiway(session_id: str, limit_events: int, max_nodes: int, actor_order: bool) -> dict:
+    # Load relay packets for this session.
+    raw: List[dict] = []
+    for p in _relay_jsonl_paths():
+        raw.extend(_read_jsonl(p))
+
+    evs = []
+    for r in raw:
+        if str(r.get("sessionId", "")).strip() != session_id:
+            continue
+        ts = str(r.get("ts") or "")
+        if not ts:
+            continue
+        try:
+            t = _parse_ts_iso(ts)
+        except Exception:
+            continue
+        evs.append({
+            "ts": ts,
+            "t": t,
+            "actor": str(r.get("from") or "unknown"),
+            "text": str(r.get("text") or ""),
+            "in_reply_to": r.get("in_reply_to") if isinstance(r.get("in_reply_to"), dict) else None,
+        })
+
+    evs.sort(key=lambda e: (e["t"], e["actor"], e["ts"]))
+    evs = evs[: max(0, int(limit_events))]
+
+    # deps by index
+    by_ts = {e["ts"]: i for i, e in enumerate(evs)}
+    deps = {i: set() for i in range(len(evs))}
+
+    for i, e in enumerate(evs):
+        irt = e.get("in_reply_to") or {}
+        p_ts = irt.get("ts")
+        if p_ts and p_ts in by_ts:
+            deps[i].add(by_ts[p_ts])
+
+    if actor_order:
+        last = {}
+        for i, e in enumerate(evs):
+            a = e.get("actor")
+            if a in last:
+                deps[i].add(last[a])
+            last[a] = i
+
+    # multiway states graph over done-sets
+    from hashlib import blake2b
+
+    def sid(done: frozenset[int]) -> str:
+        s = ",".join(map(str, sorted(done)))
+        return "s" + blake2b(s.encode("utf-8"), digest_size=8).hexdigest()
+
+    start = frozenset()
+    nodes = {sid(start): {"id": sid(start), "done": [], "k": 0}}
+    edges = []
+    frontier = [start]
+    seen = {sid(start)}
+
+    while frontier and len(nodes) < max_nodes:
+        done = frontier.pop(0)
+        src = sid(done)
+        # available events
+        avail = []
+        for i in range(len(evs)):
+            if i in done:
+                continue
+            if deps[i].issubset(done):
+                avail.append(i)
+        for i in avail:
+            nd = frozenset(set(done) | {i})
+            dst = sid(nd)
+            if dst not in nodes:
+                nodes[dst] = {"id": dst, "done": sorted(list(nd)), "k": len(nd)}
+            edges.append({"src": src, "dst": dst, "add": i})
+            if dst not in seen and len(nodes) < max_nodes:
+                seen.add(dst)
+                frontier.append(nd)
+
+    # ---- derived stats (actionable probes) ----
+    node_list = list(nodes.values())
+    edge_list = edges
+
+    # Xi_k: number of multiway states per layer k
+    xi_by_k: Dict[int, int] = {}
+    for n in node_list:
+        k = int(n.get("k", 0) or 0)
+        xi_by_k[k] = xi_by_k.get(k, 0) + 1
+
+    # Merge/diamond proxy: nodes with indegree >= 2
+    indeg: Dict[str, int] = {}
+    for e in edge_list:
+        indeg[e["dst"]] = indeg.get(e["dst"], 0) + 1
+    merges = sum(1 for v in indeg.values() if v >= 2)
+
+    # Path counts on the multiway DAG (dynamic programming by k)
+    paths: Dict[str, int] = {}
+    start_id = sid(start)
+    paths[start_id] = 1
+    nodes_by_k: Dict[int, List[str]] = {}
+    for n in node_list:
+        nodes_by_k.setdefault(int(n.get("k", 0) or 0), []).append(str(n.get("id")))
+    max_k = max(nodes_by_k.keys() or [0])
+
+    # adjacency src->[(dst,...)]
+    adj: Dict[str, List[str]] = {}
+    for e in edge_list:
+        adj.setdefault(e["src"], []).append(e["dst"])
+
+    for k in range(0, max_k + 1):
+        for nid in nodes_by_k.get(k, []):
+            c = paths.get(nid, 0)
+            if not c:
+                continue
+            for dst in adj.get(nid, []):
+                paths[dst] = paths.get(dst, 0) + c
+
+    # Event causal-cone probe on the relay dependency DAG
+    # deps: i depends on deps[i]; edges go dep -> i
+    fut: Dict[int, List[int]] = {i: [] for i in range(len(evs))}
+    for i, ds in deps.items():
+        for d in ds:
+            fut.setdefault(d, []).append(i)
+
+    def cone_size(seed: int, tmax: int) -> List[int]:
+        # sizes for t=1..tmax (reachable within t steps)
+        frontier = {seed}
+        seen = {seed}
+        out = []
+        for _ in range(tmax):
+            nxt = set()
+            for u in frontier:
+                for v in fut.get(u, []):
+                    if v not in seen:
+                        seen.add(v)
+                        nxt.add(v)
+            frontier = nxt
+            out.append(len(seen) - 1)  # exclude seed
+        return out
+
+    tmax = 8
+    cone_mean = []
+    if len(evs) >= 3:
+        # sample a few seeds deterministically: first, middle, last
+        seeds = sorted({0, len(evs) // 2, max(0, len(evs) - 1)})
+        curves = [cone_size(s, tmax) for s in seeds]
+        for ti in range(tmax):
+            cone_mean.append(sum(c[ti] for c in curves) / max(1, len(curves)))
+
+    # Slice entropy (normalize path counts within a k-layer)
+    import math
+
+    paths_by_k: Dict[int, List[int]] = {}
+    for n in node_list:
+        nid = str(n.get("id"))
+        k = int(n.get("k", 0) or 0)
+        paths_by_k.setdefault(k, []).append(int(paths.get(nid, 0)))
+
+    def entropy(vals: List[int]) -> float:
+        s = float(sum(vals))
+        if s <= 0:
+            return 0.0
+        h = 0.0
+        for c in vals:
+            if c <= 0:
+                continue
+            p = c / s
+            h -= p * math.log(p + 1e-18)
+        return h
+
+    max_k_layer = int(max(xi_by_k.keys() or [0]))
+    h_maxk = entropy(paths_by_k.get(max_k_layer, []))
+    peak_maxk = 0.0
+    if paths_by_k.get(max_k_layer):
+        s = float(sum(paths_by_k[max_k_layer])) or 1.0
+        peak_maxk = max(paths_by_k[max_k_layer]) / s
+
+    stats = {
+        "xiByK": {str(k): int(v) for k, v in sorted(xi_by_k.items())},
+        "xiMax": int(max(xi_by_k.values() or [1])),
+        "maxK": int(max_k_layer),
+        "merges": int(merges),
+        "pathsTotal": int(sum(paths.values())) if paths else 0,
+        "entropyMaxK": float(h_maxk),
+        "peakMaxK": float(peak_maxk),
+        "coneMean": [float(x) for x in cone_mean],
+        "coneTmax": int(tmax),
+    }
+
+    return {
+        "sessionId": session_id,
+        "events": evs,
+        "deps": {str(k): sorted(list(v)) for k, v in deps.items()},
+        "nodes": node_list,
+        "edges": edge_list,
+        "capped": len(nodes) >= max_nodes,
+        "stats": stats,
+    }
+
+
+async def _multiway_live_loop(session_id: str) -> None:
+    cfg = _multiway_cfg.get(session_id) or {}
+    interval = float(cfg.get("intervalSec", 2.0))
+    limit_events = int(cfg.get("limitEvents", 14))
+    max_nodes = int(cfg.get("maxNodes", 1200))
+    actor_order = bool(cfg.get("actorOrder", False))
+
+    outdir = os.path.join(_UI_DIR, "out")
+    os.makedirs(outdir, exist_ok=True)
+    # Write to a dedicated live-feed file to avoid clobbering by offline scripts.
+    out_path = os.path.join(outdir, "openclaw_multiway_live.json")
+
+    while True:
+        # recompute
+        g = await _compute_openclaw_multiway(session_id, limit_events, max_nodes, actor_order)
+        st = g.get("stats") or {}
+        sig = f"{len(g.get('events') or [])}:{len(g.get('nodes') or [])}:{len(g.get('edges') or [])}:{int(g.get('capped') or 0)}:{st.get('xiMax')}:{st.get('merges')}"
+        if _multiway_last_sig.get(session_id) != sig:
+            _multiway_last_sig[session_id] = sig
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(g, f)
+            except Exception:
+                pass
+
+            # append to a simple run registry (jsonl)
+            try:
+                reg_path = os.path.join(outdir, "multiway_registry.jsonl")
+                with open(reg_path, "a", encoding="utf-8") as rf:
+                    rf.write(json.dumps({
+                        "ts": datetime.datetime.utcnow().isoformat(),
+                        "sessionId": session_id,
+                        "sig": sig,
+                        "limitEvents": limit_events,
+                        "maxNodes": max_nodes,
+                        "actorOrder": actor_order,
+                        "events": len(g.get("events") or []),
+                        "nodes": len(g.get("nodes") or []),
+                        "edges": len(g.get("edges") or []),
+                        "capped": bool(g.get("capped")),
+                        "stats": g.get("stats") or {},
+                    }) + "\n")
+            except Exception:
+                pass
+
+            await _sse_emit(session_id, "multiway", {
+                "sessionId": session_id,
+                "multiway": {
+                    "events": len(g.get("events") or []),
+                    "nodes": len(g.get("nodes") or []),
+                    "edges": len(g.get("edges") or []),
+                    "capped": bool(g.get("capped")),
+                    "limitEvents": limit_events,
+                    "maxNodes": max_nodes,
+                    "actorOrder": actor_order,
+                    # actionable stats
+                    "xiMax": (g.get("stats") or {}).get("xiMax"),
+                    "maxK": (g.get("stats") or {}).get("maxK"),
+                    "merges": (g.get("stats") or {}).get("merges"),
+                    "pathsTotal": (g.get("stats") or {}).get("pathsTotal"),
+                    "coneMean": (g.get("stats") or {}).get("coneMean"),
+                    "coneTmax": (g.get("stats") or {}).get("coneTmax"),
+                    "entropyMaxK": (g.get("stats") or {}).get("entropyMaxK"),
+                    "peakMaxK": (g.get("stats") or {}).get("peakMaxK"),
+                },
+            })
+
+        await asyncio.sleep(interval)
+
+
+async def _get_bridge_skills(force_refresh: bool = False) -> List[dict]:
+    now = time.time()
+    cached = _bridge_skills_cache.get("skills") or []
+    fetched_at = float(_bridge_skills_cache.get("fetched_at") or 0.0)
+    if not force_refresh and cached and (now - fetched_at) < _BRIDGE_SKILLS_TTL_S:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as hx:
+            r = await hx.get(f"{OPENCLAW_BRIDGE}/skills")
+            r.raise_for_status()
+            payload = r.json()
+            skills = payload.get("skills", [])
+            if isinstance(skills, list):
+                _bridge_skills_cache["skills"] = skills
+                _bridge_skills_cache["fetched_at"] = now
+                return skills
+    except Exception as e:
+        if cached:
+            print(f"[BRIDGE_SKILLS_CACHE] using stale cached skills after fetch failure: {repr(e)}", flush=True)
+            return cached
+        print(f"[BRIDGE_SKILLS_CACHE] skills fetch failed with no cache: {repr(e)}", flush=True)
+        return []
+
+    return cached
 
 
 def _skills_to_openai_tools(skills: List[dict]) -> List[dict]:
@@ -366,11 +911,24 @@ async def _forward_bridge_events(job_id: str, session_id: str) -> None:
                             if buf is None:
                                 buf = deque(maxlen=_DYNASTY_BUF_N)
                                 _dynasty_metrics_buf[session_id] = buf
-                            # keep only compact numeric fields
-                            keep = {k: out.get(k) for k in [
-                                "t", "q", "p", "S4", "E", "rms", "ema_rms", "gamma", "dgamma",
-                                "jobId", "_bridge_ts"
-                            ] if k in out}
+                            # keep only compact numeric fields (shadow probe uses these)
+                            keep = {
+                                k: out.get(k)
+                                for k in [
+                                    "t",
+                                    "q",
+                                    "p",
+                                    "S4",
+                                    "E",
+                                    "rms",
+                                    "ema_rms",
+                                    "gamma",
+                                    "dgamma",
+                                    "jobId",
+                                    "_bridge_ts",
+                                ]
+                                if k in out
+                            }
                             buf.append(keep)
 
                         await _sse_emit(session_id, current_event, out)
@@ -504,8 +1062,8 @@ async def _watch_major_inbox_forever(poll_sec: float = 2.0):
     state = _load_relay_state()
     offset = int(state.get("major_offset", 0) or 0)
 
-    # Separate OpenAI client for this module
-    local_client = OpenAI()
+    # Separate client for this module; use a fresh client to avoid stale local transport state
+    local_client = make_client()
 
     while True:
         try:
@@ -549,6 +1107,9 @@ async def _watch_major_inbox_forever(poll_sec: float = 2.0):
                             )
                             reply_text = (resp.choices[0].message.content or "").strip()
                         except Exception as e:
+                            import traceback
+                            print("[MAJOR_RELAY_COMPLETION_ERROR] model=", MODEL_NAME, "base_url=", OPENAI_BASE_URL or "<default>", "error=", repr(e), flush=True)
+                            traceback.print_exc()
                             reply_text = "(Major daemon error: failed to generate reply. Check OPENAI_API_KEY in Hybrid process.)"
                             await _sse_emit(sid, "mark", {"label": "major_daemon:error", "note": {"error": repr(e)}})
 
@@ -590,6 +1151,78 @@ async def _startup_reply_watcher():
         pass
 
 
+async def get_dynasty_snapshot(session_id: str) -> dict:
+    try:
+        result = await _bridge_invoke("dynasty_status", {}, session_id)
+        if isinstance(result, dict):
+            return result
+        return {"raw": result}
+    except Exception as e:
+        return {"error": repr(e)}
+
+
+async def run_local_model_once(messages: List[Dict[str, Any]], temperature: float = 0.2) -> str:
+    response = make_client().chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        temperature=temperature,
+    )
+    msg = response.choices[0].message
+    return (msg.content or "").strip()
+
+
+async def run_loop_step(session_id: str) -> dict:
+    state = get_loop_state(session_id)
+    snapshot = await get_dynasty_snapshot(session_id)
+    regime = reduce_dynasty_regime(snapshot)
+    operator = choose_loop_operator(state, regime)
+    prompt = build_loop_prompt(
+        state.get("objective", ""),
+        state.get("compressed_state", ""),
+        regime,
+        operator,
+    )
+    messages = [
+        {"role": "system", "content": "Return valid JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    raw = await run_local_model_once(messages, temperature=0.2)
+    parsed = parse_loop_json(raw)
+    updated_state = str(parsed.get("updated_state", "")).strip()
+    rationale = str(parsed.get("rationale", "")).strip()
+    redundancy = compute_redundancy(state.get("compressed_state", ""), updated_state)
+
+    state["enabled"] = True
+    state["running"] = True
+    state["loop_count"] = state.get("loop_count", 0) + 1
+    state["last_operator"] = operator
+    state["last_dynasty"] = snapshot
+    state["last_regime"] = regime
+    state["last_output"] = raw
+    state["redundancy_score"] = redundancy
+    state["compressed_state"] = updated_state
+    state["last_updated"] = time.time()
+    state["stop_reason"] = None
+
+    stop, reason = should_stop_loop(state)
+    if stop:
+        state["running"] = False
+        state["stop_reason"] = reason
+
+    return {
+        "ok": True,
+        "loop_count": state["loop_count"],
+        "operator": operator,
+        "regime": regime,
+        "snapshot": snapshot,
+        "compressed_state": updated_state,
+        "rationale": rationale,
+        "redundancy_score": redundancy,
+        "running": state["running"],
+        "stop_reason": state.get("stop_reason"),
+    }
+
+
 # ============================================================
 # Live Tool Events (SSE)
 # ============================================================
@@ -607,6 +1240,14 @@ async def events(sessionId: str):
     async def gen():
         # Initial ping
         yield "event: ready\n" + f"data: {json.dumps({'sessionId': sessionId})}\n\n"
+
+        # Replay last-known ticker events so the UI doesn't start at (off)
+        last = _last_sse.get(sessionId) or {}
+        for k in ["multiway", "geometry", "metrics", "mark"]:
+            if k in last:
+                evt = last[k]
+                yield f"event: {evt.get('event','message')}\n" + f"data: {json.dumps(evt.get('data'))}\n\n"
+
         while True:
             evt = await q.get()
             event = evt.get("event", "message")
@@ -668,6 +1309,105 @@ async def chat(request: ChatRequest):
         # ------------------------------------------------------------
         last_user = (request.messages[-1].content.strip() if request.messages else "")
         skill_names = {s.get("name") for s in skills if s.get("name")}
+
+        # deterministic Dynasty runtime commands: preserve the old convenience for explicit imperative phrasing
+        if last_user.lower() in {"run dynasty", "start dynasty"}:
+            content = json.dumps(await _bridge_invoke("dynasty_step", {"n": 0, "emitEvery": 200}, session_id), indent=2)
+            return {
+                "id": f"dyn-{os.urandom(6).hex()}",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }
+
+        if last_user.lower() in {"enable plasticity", "turn plasticity on", "plasticity on"}:
+            content = json.dumps(await _bridge_invoke("dynasty_step", {"n": 0, "emitEvery": 200, "plasticity": {"enabled": True}}, session_id), indent=2)
+            return {
+                "id": f"dyn-{os.urandom(6).hex()}",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }
+
+        if last_user.lower() in {"disable plasticity", "turn plasticity off", "plasticity off"}:
+            content = json.dumps(await _bridge_invoke("dynasty_step", {"n": 0, "emitEvery": 200, "plasticity": {"enabled": False}}, session_id), indent=2)
+            return {
+                "id": f"dyn-{os.urandom(6).hex()}",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }
+
+        if last_user.lower() in {"run dynasty and enable plasticity", "start dynasty and enable plasticity"}:
+            content = json.dumps(await _bridge_invoke("dynasty_step", {"n": 0, "emitEvery": 200, "plasticity": {"enabled": True}}, session_id), indent=2)
+            return {
+                "id": f"dyn-{os.urandom(6).hex()}",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }
+
+        # controlled recurrence loop commands (deterministic)
+        if last_user.startswith("/loop"):
+            state = get_loop_state(session_id)
+            parts = last_user.split(None, 2)
+            sub = parts[1].strip().lower() if len(parts) >= 2 else "status"
+            tail = parts[2].strip() if len(parts) >= 3 else ""
+
+            if sub == "objective":
+                state["objective"] = tail
+                content = json.dumps({"ok": True, "objective": state["objective"]}, indent=2)
+            elif sub == "max":
+                try:
+                    state["max_loops"] = max(1, int(tail))
+                    content = json.dumps({"ok": True, "max_loops": state["max_loops"]}, indent=2)
+                except Exception:
+                    content = json.dumps({"ok": False, "error": "expected integer for /loop max"}, indent=2)
+            elif sub == "start":
+                state["enabled"] = True
+                state["running"] = True
+                state["paused"] = False
+                state["stop_reason"] = None
+                content = json.dumps({"ok": True, "running": True}, indent=2)
+            elif sub == "pause":
+                state["paused"] = True
+                state["running"] = False
+                state["stop_reason"] = "paused"
+                content = json.dumps({"ok": True, "paused": True}, indent=2)
+            elif sub == "resume":
+                state["paused"] = False
+                state["enabled"] = True
+                state["running"] = True
+                state["stop_reason"] = None
+                content = json.dumps({"ok": True, "running": True}, indent=2)
+            elif sub == "stop":
+                state["enabled"] = False
+                state["running"] = False
+                state["paused"] = False
+                state["stop_reason"] = "manual_stop"
+                content = json.dumps({"ok": True, "running": False, "stop_reason": state["stop_reason"]}, indent=2)
+            elif sub == "reset":
+                reset_loop_state(session_id)
+                content = json.dumps({"ok": True, "reset": True}, indent=2)
+            elif sub == "step":
+                content = json.dumps(await run_loop_step(session_id), indent=2)
+            else:
+                view = {
+                    "enabled": state.get("enabled"),
+                    "running": state.get("running"),
+                    "paused": state.get("paused"),
+                    "loop_count": state.get("loop_count"),
+                    "max_loops": state.get("max_loops"),
+                    "objective": state.get("objective"),
+                    "last_operator": state.get("last_operator"),
+                    "redundancy_score": state.get("redundancy_score"),
+                    "compressed_state": state.get("compressed_state"),
+                    "last_regime": state.get("last_regime"),
+                    "stop_reason": state.get("stop_reason"),
+                }
+                content = json.dumps(view, indent=2)
+
+            return {
+                "id": f"loop-{os.urandom(6).hex()}",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            }
 
         # dynasty_auto toggle (not a bridge skill)
         if last_user.startswith("dynasty_auto"):
@@ -842,6 +1582,223 @@ async def chat(request: ChatRequest):
 
         if last_user:
             head, *rest = last_user.split(" ", 1)
+
+            # ------------------------------------------------------------
+            # Multiway live feed control (actual OpenClaw relay multiway)
+            # ------------------------------------------------------------
+            if head == "openclaw_multiway_live":
+                arg_text = rest[0].strip() if rest else ""
+                args = {}
+                if arg_text:
+                    try:
+                        args = json.loads(arg_text)
+                    except Exception:
+                        assistant_reply = "[multiway] parse error: expected JSON object"
+                        return {
+                            "id": f"mw-{os.urandom(6).hex()}",
+                            "object": "chat.completion",
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": assistant_reply}, "finish_reason": "stop"}],
+                        }
+
+                enabled = args.get("enabled")
+                if enabled is None and args == {}:
+                    cur = bool(_multiway_tasks.get(session_id))
+                    cfg = _multiway_cfg.get(session_id) or {}
+                    assistant_reply = json.dumps({"enabled": cur, **cfg}, indent=2)
+                    return {
+                        "id": f"mw-{os.urandom(6).hex()}",
+                        "object": "chat.completion",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": assistant_reply}, "finish_reason": "stop"}],
+                    }
+
+                if bool(enabled):
+                    # update cfg
+                    cfg = _multiway_cfg.get(session_id) or {}
+                    for k in ["intervalSec", "limitEvents", "maxNodes", "actorOrder"]:
+                        if k in args:
+                            cfg[k] = args[k]
+                    _multiway_cfg[session_id] = cfg
+
+                    # Ensure background loop is running
+                    t = _multiway_tasks.get(session_id)
+                    if t is None or t.done():
+                        _multiway_tasks[session_id] = asyncio.create_task(_multiway_live_loop(session_id))
+
+                    # Emit an immediate multiway update (even if signature unchanged)
+                    try:
+                        interval = float(cfg.get("intervalSec", 2.0))
+                        limit_events = int(cfg.get("limitEvents", 14))
+                        max_nodes = int(cfg.get("maxNodes", 1200))
+                        actor_order = bool(cfg.get("actorOrder", False))
+
+                        outdir = os.path.join(_UI_DIR, "out")
+                        os.makedirs(outdir, exist_ok=True)
+                        out_path = os.path.join(outdir, "openclaw_multiway_live.json")
+
+                        g = await _compute_openclaw_multiway(session_id, limit_events, max_nodes, actor_order)
+                        st = g.get("stats") or {}
+                        sig = f"{len(g.get('events') or [])}:{len(g.get('nodes') or [])}:{len(g.get('edges') or [])}:{int(g.get('capped') or 0)}:{st.get('xiMax')}:{st.get('merges')}"
+                        _multiway_last_sig[session_id] = sig
+                        with open(out_path, "w", encoding="utf-8") as f:
+                            json.dump(g, f)
+
+                        await _sse_emit(session_id, "multiway", {
+                            "sessionId": session_id,
+                            "multiway": {
+                                "events": len(g.get("events") or []),
+                                "nodes": len(g.get("nodes") or []),
+                                "edges": len(g.get("edges") or []),
+                                "capped": bool(g.get("capped")),
+                                "limitEvents": limit_events,
+                                "maxNodes": max_nodes,
+                                "actorOrder": actor_order,
+                                "xiMax": st.get("xiMax"),
+                                "maxK": st.get("maxK"),
+                                "merges": st.get("merges"),
+                                "pathsTotal": st.get("pathsTotal"),
+                                "entropyMaxK": st.get("entropyMaxK"),
+                                "peakMaxK": st.get("peakMaxK"),
+                                "coneMean": st.get("coneMean"),
+                                "coneTmax": st.get("coneTmax"),
+                            },
+                        })
+                    except Exception:
+                        pass
+
+                    await _sse_emit(session_id, "mark", {"label": "multiway:live:on", "note": cfg})
+                    return {
+                        "id": f"mw-{os.urandom(6).hex()}",
+                        "object": "chat.completion",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "[multiway] live enabled"}, "finish_reason": "stop"}],
+                    }
+
+                # disable
+                t = _multiway_tasks.get(session_id)
+                if t and not t.done():
+                    t.cancel()
+                _multiway_tasks.pop(session_id, None)
+                await _sse_emit(session_id, "mark", {"label": "multiway:live:off"})
+                return {
+                    "id": f"mw-{os.urandom(6).hex()}",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "[multiway] live disabled"}, "finish_reason": "stop"}],
+                }
+
+        # ------------------------------------------------------------
+            # Shadow geometry probe (no stepping; uses physiology buffer)
+            # ------------------------------------------------------------
+            if head == "dynasty_geometry_shadow":
+                arg_text = rest[0].strip() if rest else ""
+                if arg_text:
+                    try:
+                        args = json.loads(arg_text)
+                    except Exception:
+                        assistant_reply = "[geometry-shadow] parse error: expected JSON object"
+                        return {
+                            "id": f"geom-{os.urandom(6).hex()}",
+                            "object": "chat.completion",
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": assistant_reply}, "finish_reason": "stop"}],
+                        }
+                else:
+                    args = {}
+
+                window = int(args.get("window", 501))
+                pca_target = float(args.get("pcaVariance", 0.95))
+                r_bins = int(args.get("rBins", 12))
+
+                buf = _dynasty_metrics_buf.get(session_id)
+                samples = list(buf) if buf is not None else []
+                if len(samples) < 10:
+                    assistant_reply = "[geometry-shadow] not enough Dynasty metrics yet (need ~10 samples)"
+                    return {
+                        "id": f"geom-{os.urandom(6).hex()}",
+                        "object": "chat.completion",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": assistant_reply}, "finish_reason": "stop"}],
+                    }
+
+                samples = samples[-max(10, min(window, len(samples))):]
+
+                import numpy as np
+
+                vecs = []
+                for s in samples:
+                    vecs.append([
+                        float(s.get("q") or 0.0),
+                        float(s.get("p") or 0.0),
+                        float(s.get("S4") or 0.0),
+                        float(s.get("E") or 0.0),
+                        float(s.get("rms") or 0.0),
+                        float(s.get("ema_rms") or 0.0),
+                        float(s.get("gamma") or 0.0),
+                        float(s.get("dgamma") or 0.0),
+                    ])
+
+                X = np.asarray(vecs, dtype=float)
+                geom: Dict[str, Any] = {"nSamples": int(X.shape[0]), "dim": int(X.shape[1]), "pca_target": pca_target}
+
+                # PCA
+                if X.shape[0] >= 3:
+                    Xc = X - X.mean(axis=0, keepdims=True)
+                    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+                    ev = (S * S)
+                    evr = ev / (ev.sum() + 1e-12)
+                    cum = np.cumsum(evr)
+                    k = int(np.searchsorted(cum, pca_target) + 1)
+                    geom["pca_k"] = k
+
+                # Correlation dimension proxy
+                dists = []
+                for a in range(X.shape[0]):
+                    for b in range(a + 1, X.shape[0]):
+                        d = float(np.linalg.norm(X[a] - X[b]))
+                        if d > 0:
+                            dists.append(d)
+                dists = np.asarray(dists, dtype=float)
+                if dists.size >= 10:
+                    dmin = float(np.percentile(dists, 5))
+                    dmax = float(np.percentile(dists, 95))
+                    if dmax > dmin > 0:
+                        rs = np.logspace(np.log10(dmin), np.log10(dmax), num=max(3, r_bins))
+                        counts = [float((dists <= r0).mean()) for r0 in rs]
+                        lo = len(rs) // 3
+                        hi = 2 * len(rs) // 3
+                        xx = np.log(rs[lo:hi])
+                        yy = np.log(np.asarray(counts[lo:hi]) + 1e-12)
+                        if xx.size >= 2:
+                            geom["corr_dim"] = float(np.polyfit(xx, yy, 1)[0])
+
+                # Emit SSE geometry event for UI status bar
+                await _sse_emit(session_id, "geometry", {
+                    "sessionId": session_id,
+                    "t": samples[-1].get("t"),
+                    "geometry": {
+                        "pca_k": geom.get("pca_k"),
+                        "pca_target": geom.get("pca_target"),
+                        "corr_dim": geom.get("corr_dim"),
+                        "nSamples": geom.get("nSamples"),
+                        "dim": geom.get("dim"),
+                        "shadow": True,
+                    },
+                })
+
+                parts = []
+                if geom.get("pca_k") is not None:
+                    parts.append(f"PCA@{int(round(pca_target*100))}%={geom.get('pca_k')}")
+                if geom.get("corr_dim") is not None:
+                    parts.append(f"corrDim={float(geom.get('corr_dim')):.2f}")
+                parts.append(f"n={geom.get('nSamples')}")
+                assistant_reply = "[geometry-shadow] " + " | ".join(parts)
+
+                update_memory(last_user, assistant_reply)
+                return {
+                    "id": f"geom-{os.urandom(6).hex()}",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": assistant_reply}, "finish_reason": "stop"}],
+                }
+
+            # ------------------------------------------------------------
+            # Direct tool mode (bridge skills)
+            # ------------------------------------------------------------
             if head in skill_names:
                 arg_text = rest[0].strip() if rest else ""
                 if arg_text:
@@ -864,7 +1821,34 @@ async def chat(request: ChatRequest):
                     args = {}
 
                 tool_result = await _bridge_invoke(head, args, session_id)
+
+                # Default: acknowledge invocation (tool progress and results stream over SSE).
                 assistant_reply = f"[tool] invoked {head}"
+
+                # For noisy tools, summarize instead of dumping full JSON into the chat.
+                if head == "dynasty_geometry_probe":
+                    g = (tool_result.get("result") or {}).get("geometry") if isinstance(tool_result, dict) else None
+                    # bridge returns full job object when waited; in our direct mode it returns final job json.
+                    if g is None and isinstance(tool_result, dict):
+                        g = tool_result.get("geometry")
+                    if isinstance(g, dict):
+                        pca_k = g.get("pca_k")
+                        pca_target = g.get("pca_target")
+                        corr_dim = g.get("corr_dim")
+                        nS = g.get("nSamples")
+                        parts = []
+                        if pca_k is not None and pca_target is not None:
+                            parts.append(f"PCA@{int(round(float(pca_target)*100))}%={pca_k}")
+                        if corr_dim is not None:
+                            try:
+                                parts.append(f"corrDim={float(corr_dim):.2f}")
+                            except Exception:
+                                parts.append(f"corrDim={corr_dim}")
+                        if nS is not None:
+                            parts.append(f"n={nS}")
+                        if parts:
+                            assistant_reply = "[geometry] " + " | ".join(parts)
+
                 update_memory(last_user, assistant_reply)
 
                 return {
@@ -873,7 +1857,7 @@ async def chat(request: ChatRequest):
                     "choices": [
                         {
                             "index": 0,
-                            "message": {"role": "assistant", "content": assistant_reply + "\n" + json.dumps(tool_result)},
+                            "message": {"role": "assistant", "content": assistant_reply},
                             "finish_reason": "stop",
                         }
                     ],
@@ -885,18 +1869,26 @@ async def chat(request: ChatRequest):
         response = None
 
         for _round in range(max_tool_rounds):
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=messages,
-                tools=tools if tools else None,
-            )
+            try:
+                response = make_client().chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    tools=tools if tools else None,
+                )
+            except Exception as e:
+                import traceback
+                print("[HYBRID_COMPLETION_ERROR] model=", MODEL_NAME, "base_url=", OPENAI_BASE_URL or "<default>", "error=", repr(e), flush=True)
+                traceback.print_exc()
+                raise
 
             msg = response.choices[0].message
             assistant_text = msg.content or ""
-            last_assistant_text = assistant_text
 
             tool_calls = getattr(msg, "tool_calls", None)
             if tool_calls:
+                # Some weaker/local models leak raw tool-call JSON into assistant_text.
+                # Suppress visible assistant content during tool rounds and preserve only the tool_calls.
+                assistant_text = ""
                 messages.append({
                     "role": "assistant",
                     "content": assistant_text,
@@ -921,14 +1913,79 @@ async def chat(request: ChatRequest):
                     except Exception:
                         args = {}
 
+                    last_user_text = (request.messages[-1].content if request.messages else "") or ""
+                    last_user_l = str(last_user_text).lower()
+
+                    # Soft guardrails only: preserve plain-language Dynasty behavior while still correcting
+                    # obviously malformed control calls when the model already chose dynasty_step.
+                    if name == "dynasty_step" and isinstance(args, dict):
+                        try:
+                            requested_n = int(args.get("n", 1) or 0)
+                        except Exception:
+                            requested_n = 1
+
+                        # Only coerce plasticity schema; do not force conversational prompts mentioning Dynasty
+                        # into stronger runtime control than the model already selected.
+                        if any(marker in last_user_l for marker in ["enable plasticity", "turn plasticity on", "plasticity on"]):
+                            plasticity = args.get("plasticity") if isinstance(args.get("plasticity"), dict) else {}
+                            plasticity["enabled"] = True
+                            args["plasticity"] = plasticity
+                            if requested_n > 0:
+                                args.setdefault("emitEvery", 200)
+                            print("[DYNASTY_PLASTICITY] normalized request to plasticity.enabled=true", flush=True)
+                        elif any(marker in last_user_l for marker in ["disable plasticity", "turn plasticity off", "plasticity off"]):
+                            plasticity = args.get("plasticity") if isinstance(args.get("plasticity"), dict) else {}
+                            plasticity["enabled"] = False
+                            args["plasticity"] = plasticity
+                            if requested_n > 0:
+                                args.setdefault("emitEvery", 200)
+                            print("[DYNASTY_PLASTICITY] normalized request to plasticity.enabled=false", flush=True)
+
+                    # Preservation guardrail: only block unsolicited cancel while live Dynasty is active.
+                    # Do not rewrite ordinary conversational/tool behavior more aggressively than that.
+                    explicit_dynasty_change = any(marker in last_user_l for marker in [
+                        "stop dynasty", "cancel dynasty", "restart dynasty", "reset dynasty",
+                        "turn off dynasty", "disable dynasty", "kill dynasty",
+                    ])
+                    if session_id and _dynasty_running.get(session_id):
+                        if name == "dynasty_cancel" and not explicit_dynasty_change:
+                            print("[DYNASTY_PRESERVE] blocked unsolicited dynasty_cancel while live run active", flush=True)
+                            tool_result = {"ok": False, "blocked": True, "reason": "Dynasty is already running; cancel ignored without explicit user instruction."}
+                            messages.append({"role": "tool", "tool_call_id": tc_id, "content": json.dumps(tool_result)})
+                            continue
+
                     tool_result = await _bridge_invoke(name, args, session_id, call_id=tc_id)
                     messages.append({"role": "tool", "tool_call_id": tc_id, "content": json.dumps(tool_result)})
 
                 continue
 
             if assistant_text:
+                last_assistant_text = assistant_text
                 messages.append({"role": "assistant", "content": assistant_text})
             break
+
+        if not last_assistant_text.strip():
+            try:
+                synthesis_messages = messages + [{
+                    "role": "system",
+                    "content": "Produce a short, direct user-facing reply based on the conversation so far. Do not emit tool calls or JSON.",
+                }]
+                synthesis_response = make_client().chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=synthesis_messages,
+                )
+                synthesis_msg = synthesis_response.choices[0].message
+                synthesis_text = (synthesis_msg.content or "").strip()
+                if synthesis_text:
+                    last_assistant_text = synthesis_text
+                    response = synthesis_response
+            except Exception as e:
+                import traceback
+                print("[HYBRID_FINAL_SYNTHESIS_ERROR] model=", MODEL_NAME, "base_url=", OPENAI_BASE_URL or "<default>", "error=", repr(e), flush=True)
+                traceback.print_exc()
+
+        if not last_assistant_text.strip():
+            last_assistant_text = "I completed the internal step, but failed to generate a visible reply."
 
         last_user_message = request.messages[-1].content if request.messages else ""
         update_memory(last_user_message, last_assistant_text)
