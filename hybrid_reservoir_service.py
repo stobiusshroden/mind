@@ -10,7 +10,7 @@ from collections import deque
 from typing import List, Dict, Any, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -70,10 +70,15 @@ _tx_enabled: Dict[str, bool] = {}
 
 # sessionId -> whether Dynasty continuous streaming is considered "running"
 _dynasty_running: Dict[str, bool] = {}
+_dynasty_active_job: Dict[str, str] = {}
+_dynasty_forward_tasks: Dict[str, asyncio.Task] = {}
 
 # sessionId -> ring buffer of last N dynasty metrics samples (physiology)
 _dynasty_metrics_buf: Dict[str, deque] = {}
 _DYNASTY_BUF_N = 600  # physiology ring buffer for shadow probes
+_SESSION_IDLE_TTL_S = int(os.environ.get("HYBRID_SESSION_IDLE_TTL_S", "21600"))
+_MAX_SESSION_STATES = int(os.environ.get("HYBRID_MAX_SESSION_STATES", "200"))
+_session_last_seen: Dict[str, float] = {}
 
 # sessionId -> controlled recurrence loop state
 _loop_states: Dict[str, dict] = {}
@@ -113,6 +118,76 @@ def get_loop_state(session_id: str) -> dict:
 
 def reset_loop_state(session_id: str):
     _loop_states.pop(session_id or "default", None)
+
+
+def _touch_session(session_id: str) -> None:
+    if session_id:
+        _session_last_seen[session_id] = time.time()
+
+
+def _drop_session_state(session_id: str) -> None:
+    _session_queues.pop(session_id, None)
+    _last_sse.pop(session_id, None)
+    _dynasty_auto_cfg.pop(session_id, None)
+    _multiway_cfg.pop(session_id, None)
+    _multiway_last_sig.pop(session_id, None)
+    _tx_enabled.pop(session_id, None)
+    _dynasty_running.pop(session_id, None)
+    _dynasty_metrics_buf.pop(session_id, None)
+    _loop_states.pop(session_id, None)
+    _session_last_seen.pop(session_id, None)
+
+
+def _prune_sessions() -> None:
+    now = time.time()
+    stale = [sid for sid, ts in _session_last_seen.items() if (now - ts) >= _SESSION_IDLE_TTL_S]
+    for sid in stale:
+        auto_t = _dynasty_auto_tasks.get(sid)
+        if auto_t and not auto_t.done():
+            auto_t.cancel()
+        _dynasty_auto_tasks.pop(sid, None)
+        mw_t = _multiway_tasks.get(sid)
+        if mw_t and not mw_t.done():
+            mw_t.cancel()
+        _multiway_tasks.pop(sid, None)
+        fwd = _dynasty_forward_tasks.get(sid)
+        if fwd and not fwd.done():
+            fwd.cancel()
+        _dynasty_forward_tasks.pop(sid, None)
+        _dynasty_active_job.pop(sid, None)
+        _drop_session_state(sid)
+
+    if len(_session_last_seen) <= _MAX_SESSION_STATES:
+        return
+
+    overflow = len(_session_last_seen) - _MAX_SESSION_STATES
+    for sid, _ in sorted(_session_last_seen.items(), key=lambda x: x[1])[:overflow]:
+        auto_t = _dynasty_auto_tasks.get(sid)
+        if auto_t and not auto_t.done():
+            auto_t.cancel()
+        _dynasty_auto_tasks.pop(sid, None)
+        mw_t = _multiway_tasks.get(sid)
+        if mw_t and not mw_t.done():
+            mw_t.cancel()
+        _multiway_tasks.pop(sid, None)
+        fwd = _dynasty_forward_tasks.get(sid)
+        if fwd and not fwd.done():
+            fwd.cancel()
+        _dynasty_forward_tasks.pop(sid, None)
+        _dynasty_active_job.pop(sid, None)
+        _drop_session_state(sid)
+
+
+def _stop_dynasty_stream(session_id: str, target_job_id: Optional[str] = None) -> None:
+    _dynasty_running[session_id] = False
+    active = _dynasty_active_job.get(session_id)
+    job_id = target_job_id or active
+    if active and (target_job_id is None or active == target_job_id):
+        _dynasty_active_job.pop(session_id, None)
+    task = _dynasty_forward_tasks.get(session_id)
+    if task and not task.done() and (job_id is None or (active == job_id)):
+        task.cancel()
+        _dynasty_forward_tasks.pop(session_id, None)
 
 
 def reduce_dynasty_regime(snapshot: dict) -> dict:
@@ -448,6 +523,7 @@ Energy: {emotional_state.get("energy")}
 async def _sse_emit(session_id: str, event: str, data: Any) -> None:
     if not session_id:
         return
+    _touch_session(session_id)
 
     # stash latest event payload for replay on reconnect
     try:
@@ -830,6 +906,11 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
 
     # Continuous dynasty mode: return immediately, keep SSE forwarding running.
     if skill == "dynasty_step" and int(args.get("n", 1) or 0) == 0:
+        prev = _dynasty_forward_tasks.get(session_id)
+        if prev and not prev.done():
+            prev.cancel()
+        _dynasty_forward_tasks[session_id] = forward_task
+        _dynasty_active_job[session_id] = job_id
         _dynasty_running[session_id] = True
         await _sse_emit(session_id, "tool", {
             "phase": "finished",
@@ -840,6 +921,11 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
             "continuous": True,
         })
         return {"jobId": job_id, "status": "running", "continuous": True}
+
+    if skill == "dynasty_cancel":
+        # Teardown immediately so UI/physiology stops even before bridge cancel poll completes.
+        target = str(args.get("jobId") or "").strip() or _dynasty_active_job.get(session_id)
+        _stop_dynasty_stream(session_id, target_job_id=target)
 
     # Otherwise, wait for completion (poll). This keeps the LLM loop simple.
     final = None
@@ -866,7 +952,10 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
 
     # If cancel succeeded, consider dynasty no longer running and stop physiology ingestion.
     if skill == "dynasty_cancel" and (final or {}).get("ok"):
-        _dynasty_running[session_id] = False
+        target = None
+        if isinstance(final, dict):
+            target = str(((final.get("result") or {}).get("jobId") or "")).strip() or None
+        _stop_dynasty_stream(session_id, target_job_id=target)
 
     return final or {"jobId": job_id, "status": "unknown"}
 
@@ -906,6 +995,9 @@ async def _forward_bridge_events(job_id: str, session_id: str) -> None:
 
                         # Physiology ingestion: maintain ring buffer of metrics while dynasty is running.
                         if current_event == "metrics" and isinstance(out, dict):
+                            # Only accept metrics for the actively-running continuous dynasty job.
+                            if (not _dynasty_running.get(session_id)) or (_dynasty_active_job.get(session_id) != job_id):
+                                continue
                             _dynasty_running[session_id] = True
                             buf = _dynasty_metrics_buf.get(session_id)
                             if buf is None:
@@ -1151,6 +1243,24 @@ async def _startup_reply_watcher():
         pass
 
 
+@app.on_event("shutdown")
+async def _shutdown_background_tasks():
+    global _reply_watcher_task, _major_daemon_task
+    for t in list(_dynasty_auto_tasks.values()) + list(_multiway_tasks.values()):
+        if t and not t.done():
+            t.cancel()
+    _dynasty_auto_tasks.clear()
+    _multiway_tasks.clear()
+    for t in list(_dynasty_forward_tasks.values()):
+        if t and not t.done():
+            t.cancel()
+    _dynasty_forward_tasks.clear()
+    _dynasty_active_job.clear()
+    for t in [_reply_watcher_task, _major_daemon_task]:
+        if t and not t.done():
+            t.cancel()
+
+
 async def get_dynasty_snapshot(session_id: str) -> dict:
     try:
         result = await _bridge_invoke("dynasty_status", {}, session_id)
@@ -1228,9 +1338,11 @@ async def run_loop_step(session_id: str) -> dict:
 # ============================================================
 
 @app.get("/v1/events")
-async def events(sessionId: str):
+async def events(sessionId: str, request: Request):
     if not sessionId:
         raise HTTPException(status_code=400, detail="sessionId required")
+    _touch_session(sessionId)
+    _prune_sessions()
 
     q = _session_queues.get(sessionId)
     if not q:
@@ -1238,21 +1350,29 @@ async def events(sessionId: str):
         _session_queues[sessionId] = q
 
     async def gen():
-        # Initial ping
-        yield "event: ready\n" + f"data: {json.dumps({'sessionId': sessionId})}\n\n"
+        try:
+            # Initial ping
+            yield "event: ready\n" + f"data: {json.dumps({'sessionId': sessionId})}\n\n"
 
-        # Replay last-known ticker events so the UI doesn't start at (off)
-        last = _last_sse.get(sessionId) or {}
-        for k in ["multiway", "geometry", "metrics", "mark"]:
-            if k in last:
-                evt = last[k]
-                yield f"event: {evt.get('event','message')}\n" + f"data: {json.dumps(evt.get('data'))}\n\n"
+            # Replay last-known ticker events so the UI doesn't start at (off)
+            last = _last_sse.get(sessionId) or {}
+            for k in ["multiway", "geometry", "metrics", "mark"]:
+                if k in last:
+                    evt = last[k]
+                    yield f"event: {evt.get('event','message')}\n" + f"data: {json.dumps(evt.get('data'))}\n\n"
 
-        while True:
-            evt = await q.get()
-            event = evt.get("event", "message")
-            data = evt.get("data")
-            yield f"event: {event}\n" + f"data: {json.dumps(data)}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                evt = await q.get()
+                _touch_session(sessionId)
+                event = evt.get("event", "message")
+                data = evt.get("data")
+                yield f"event: {event}\n" + f"data: {json.dumps(data)}\n\n"
+        finally:
+            # No active stream: release queue to avoid unbounded session growth.
+            if _session_queues.get(sessionId) is q:
+                _session_queues.pop(sessionId, None)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -1265,6 +1385,8 @@ async def events(sessionId: str):
 async def chat(request: ChatRequest):
     try:
         session_id = request.sessionId or ""
+        _touch_session(session_id)
+        _prune_sessions()
 
         system_prompt = build_system_prompt() + "\n\n" + (
             "You MAY call tools when it is materially helpful. "
