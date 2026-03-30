@@ -126,6 +126,11 @@ def _touch_session(session_id: str) -> None:
 
 
 def _drop_session_state(session_id: str) -> None:
+    fwd = _dynasty_forward_tasks.get(session_id)
+    if fwd and not fwd.done():
+        fwd.cancel()
+    _dynasty_forward_tasks.pop(session_id, None)
+    _dynasty_active_job.pop(session_id, None)
     _session_queues.pop(session_id, None)
     _last_sse.pop(session_id, None)
     _dynasty_auto_cfg.pop(session_id, None)
@@ -150,11 +155,6 @@ def _prune_sessions() -> None:
         if mw_t and not mw_t.done():
             mw_t.cancel()
         _multiway_tasks.pop(sid, None)
-        fwd = _dynasty_forward_tasks.get(sid)
-        if fwd and not fwd.done():
-            fwd.cancel()
-        _dynasty_forward_tasks.pop(sid, None)
-        _dynasty_active_job.pop(sid, None)
         _drop_session_state(sid)
 
     if len(_session_last_seen) <= _MAX_SESSION_STATES:
@@ -170,11 +170,6 @@ def _prune_sessions() -> None:
         if mw_t and not mw_t.done():
             mw_t.cancel()
         _multiway_tasks.pop(sid, None)
-        fwd = _dynasty_forward_tasks.get(sid)
-        if fwd and not fwd.done():
-            fwd.cancel()
-        _dynasty_forward_tasks.pop(sid, None)
-        _dynasty_active_job.pop(sid, None)
         _drop_session_state(sid)
 
 
