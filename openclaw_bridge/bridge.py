@@ -106,11 +106,66 @@ def _load_manifest() -> dict:
 _manifest = _load_manifest()
 _skill_index = {s["name"]: s for s in _manifest.get("skills", [])}
 _jobs: Dict[str, Job] = {}
+_MAX_JOBS = int(os.environ.get("OPENCLAW_BRIDGE_MAX_JOBS", "500"))
+_JOB_TTL_SEC = int(os.environ.get("OPENCLAW_BRIDGE_JOB_TTL_SEC", "21600"))
+_MAX_DYNASTY_SESSIONS = int(os.environ.get("OPENCLAW_BRIDGE_MAX_DYNASTY_SESSIONS", "128"))
+_DYNASTY_SESSION_TTL_SEC = int(os.environ.get("OPENCLAW_BRIDGE_DYNASTY_TTL_SEC", "43200"))
 
 # dynasty v19 state is stored per sessionId (from invoke.context.sessionId)
 _dynasty_sessions: Dict[str, "DynastyState"] = {}
+_dynasty_touched_at: Dict[str, float] = {}
 # sessionId -> last started continuous dynasty_step jobId
 _dynasty_last_job: Dict[str, str] = {}
+
+
+def _prune_jobs(now: Optional[float] = None) -> None:
+    now = now or time.time()
+    terminal = {"succeeded", "failed", "canceled"}
+    removable: List[tuple[str, float]] = []
+    for jid, job in _jobs.items():
+        if job.status not in terminal:
+            continue
+        ended = float(job.endedAt or job.createdAt or now)
+        if (now - ended) >= _JOB_TTL_SEC:
+            removable.append((jid, ended))
+
+    for jid, _ in removable:
+        _jobs.pop(jid, None)
+
+    if len(_jobs) <= _MAX_JOBS:
+        return
+
+    overflow = len(_jobs) - _MAX_JOBS
+    candidates = [
+        (jid, float(job.endedAt or job.createdAt or now))
+        for jid, job in _jobs.items()
+        if job.status in terminal
+    ]
+    candidates.sort(key=lambda x: x[1])
+    for jid, _ in candidates[:overflow]:
+        _jobs.pop(jid, None)
+
+
+def _prune_dynasty_sessions(now: Optional[float] = None) -> None:
+    now = now or time.time()
+    stale = [
+        sid for sid, touched in _dynasty_touched_at.items()
+        if (now - touched) >= _DYNASTY_SESSION_TTL_SEC
+    ]
+    for sid in stale:
+        _dynasty_sessions.pop(sid, None)
+        _dynasty_touched_at.pop(sid, None)
+        _dynasty_last_job.pop(sid, None)
+
+    if len(_dynasty_sessions) <= _MAX_DYNASTY_SESSIONS:
+        return
+
+    ordered = sorted(_dynasty_touched_at.items(), key=lambda x: x[1])
+    overflow = len(_dynasty_sessions) - _MAX_DYNASTY_SESSIONS
+    for sid, _ in ordered[:overflow]:
+        _dynasty_sessions.pop(sid, None)
+        _dynasty_touched_at.pop(sid, None)
+        _dynasty_last_job.pop(sid, None)
 
 
 def _public_skill_view(s: dict) -> dict:
@@ -348,11 +403,13 @@ class DynastyState:
 def _dynasty_get(session_id: str) -> DynastyState:
     if not session_id:
         session_id = "default"
+    _prune_dynasty_sessions()
     st = _dynasty_sessions.get(session_id)
     if not st:
         st = DynastyState()
         st.reset(seed=None)
         _dynasty_sessions[session_id] = st
+    _dynasty_touched_at[session_id] = time.time()
     return st
 
 
@@ -1067,6 +1124,8 @@ def list_skills() -> dict:
 
 @app.post("/skills/invoke", response_model=SkillInvokeResponse)
 async def invoke(req: SkillInvokeRequest) -> SkillInvokeResponse:
+    _prune_jobs()
+    _prune_dynasty_sessions()
     skill = _skill_index.get(req.skill)
     if not skill:
         raise HTTPException(status_code=404, detail="Unknown skill")
@@ -1086,12 +1145,13 @@ async def invoke(req: SkillInvokeRequest) -> SkillInvokeResponse:
         artifactsDir=str(artifacts_dir),
     )
     _jobs[jobId] = job
+    session_id = str((req.context or {}).get("sessionId") or "default")
+    _dynasty_touched_at[session_id] = time.time()
 
     kind = skill.get("kind", "command")
     if kind == "internal":
         # Record last continuous dynasty job for this session (used by dynasty_cancel fallback)
         try:
-            session_id = str((req.context or {}).get("sessionId") or "default")
             if req.skill == "dynasty_step" and int((req.args or {}).get("n", 1) or 0) == 0:
                 _dynasty_last_job[session_id] = jobId
         except Exception:

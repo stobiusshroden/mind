@@ -10,7 +10,7 @@ from collections import deque
 from typing import List, Dict, Any, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -74,6 +74,9 @@ _dynasty_running: Dict[str, bool] = {}
 # sessionId -> ring buffer of last N dynasty metrics samples (physiology)
 _dynasty_metrics_buf: Dict[str, deque] = {}
 _DYNASTY_BUF_N = 600  # physiology ring buffer for shadow probes
+_SESSION_IDLE_TTL_S = int(os.environ.get("HYBRID_SESSION_IDLE_TTL_S", "21600"))
+_MAX_SESSION_STATES = int(os.environ.get("HYBRID_MAX_SESSION_STATES", "200"))
+_session_last_seen: Dict[str, float] = {}
 
 # sessionId -> controlled recurrence loop state
 _loop_states: Dict[str, dict] = {}
@@ -113,6 +116,54 @@ def get_loop_state(session_id: str) -> dict:
 
 def reset_loop_state(session_id: str):
     _loop_states.pop(session_id or "default", None)
+
+
+def _touch_session(session_id: str) -> None:
+    if session_id:
+        _session_last_seen[session_id] = time.time()
+
+
+def _drop_session_state(session_id: str) -> None:
+    _session_queues.pop(session_id, None)
+    _last_sse.pop(session_id, None)
+    _dynasty_auto_cfg.pop(session_id, None)
+    _multiway_cfg.pop(session_id, None)
+    _multiway_last_sig.pop(session_id, None)
+    _tx_enabled.pop(session_id, None)
+    _dynasty_running.pop(session_id, None)
+    _dynasty_metrics_buf.pop(session_id, None)
+    _loop_states.pop(session_id, None)
+    _session_last_seen.pop(session_id, None)
+
+
+def _prune_sessions() -> None:
+    now = time.time()
+    stale = [sid for sid, ts in _session_last_seen.items() if (now - ts) >= _SESSION_IDLE_TTL_S]
+    for sid in stale:
+        auto_t = _dynasty_auto_tasks.get(sid)
+        if auto_t and not auto_t.done():
+            auto_t.cancel()
+        _dynasty_auto_tasks.pop(sid, None)
+        mw_t = _multiway_tasks.get(sid)
+        if mw_t and not mw_t.done():
+            mw_t.cancel()
+        _multiway_tasks.pop(sid, None)
+        _drop_session_state(sid)
+
+    if len(_session_last_seen) <= _MAX_SESSION_STATES:
+        return
+
+    overflow = len(_session_last_seen) - _MAX_SESSION_STATES
+    for sid, _ in sorted(_session_last_seen.items(), key=lambda x: x[1])[:overflow]:
+        auto_t = _dynasty_auto_tasks.get(sid)
+        if auto_t and not auto_t.done():
+            auto_t.cancel()
+        _dynasty_auto_tasks.pop(sid, None)
+        mw_t = _multiway_tasks.get(sid)
+        if mw_t and not mw_t.done():
+            mw_t.cancel()
+        _multiway_tasks.pop(sid, None)
+        _drop_session_state(sid)
 
 
 def reduce_dynasty_regime(snapshot: dict) -> dict:
@@ -448,6 +499,7 @@ Energy: {emotional_state.get("energy")}
 async def _sse_emit(session_id: str, event: str, data: Any) -> None:
     if not session_id:
         return
+    _touch_session(session_id)
 
     # stash latest event payload for replay on reconnect
     try:
@@ -1151,6 +1203,19 @@ async def _startup_reply_watcher():
         pass
 
 
+@app.on_event("shutdown")
+async def _shutdown_background_tasks():
+    global _reply_watcher_task, _major_daemon_task
+    for t in list(_dynasty_auto_tasks.values()) + list(_multiway_tasks.values()):
+        if t and not t.done():
+            t.cancel()
+    _dynasty_auto_tasks.clear()
+    _multiway_tasks.clear()
+    for t in [_reply_watcher_task, _major_daemon_task]:
+        if t and not t.done():
+            t.cancel()
+
+
 async def get_dynasty_snapshot(session_id: str) -> dict:
     try:
         result = await _bridge_invoke("dynasty_status", {}, session_id)
@@ -1228,9 +1293,11 @@ async def run_loop_step(session_id: str) -> dict:
 # ============================================================
 
 @app.get("/v1/events")
-async def events(sessionId: str):
+async def events(sessionId: str, request: Request):
     if not sessionId:
         raise HTTPException(status_code=400, detail="sessionId required")
+    _touch_session(sessionId)
+    _prune_sessions()
 
     q = _session_queues.get(sessionId)
     if not q:
@@ -1238,21 +1305,29 @@ async def events(sessionId: str):
         _session_queues[sessionId] = q
 
     async def gen():
-        # Initial ping
-        yield "event: ready\n" + f"data: {json.dumps({'sessionId': sessionId})}\n\n"
+        try:
+            # Initial ping
+            yield "event: ready\n" + f"data: {json.dumps({'sessionId': sessionId})}\n\n"
 
-        # Replay last-known ticker events so the UI doesn't start at (off)
-        last = _last_sse.get(sessionId) or {}
-        for k in ["multiway", "geometry", "metrics", "mark"]:
-            if k in last:
-                evt = last[k]
-                yield f"event: {evt.get('event','message')}\n" + f"data: {json.dumps(evt.get('data'))}\n\n"
+            # Replay last-known ticker events so the UI doesn't start at (off)
+            last = _last_sse.get(sessionId) or {}
+            for k in ["multiway", "geometry", "metrics", "mark"]:
+                if k in last:
+                    evt = last[k]
+                    yield f"event: {evt.get('event','message')}\n" + f"data: {json.dumps(evt.get('data'))}\n\n"
 
-        while True:
-            evt = await q.get()
-            event = evt.get("event", "message")
-            data = evt.get("data")
-            yield f"event: {event}\n" + f"data: {json.dumps(data)}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                evt = await q.get()
+                _touch_session(sessionId)
+                event = evt.get("event", "message")
+                data = evt.get("data")
+                yield f"event: {event}\n" + f"data: {json.dumps(data)}\n\n"
+        finally:
+            # No active stream: release queue to avoid unbounded session growth.
+            if _session_queues.get(sessionId) is q:
+                _session_queues.pop(sessionId, None)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -1265,6 +1340,8 @@ async def events(sessionId: str):
 async def chat(request: ChatRequest):
     try:
         session_id = request.sessionId or ""
+        _touch_session(session_id)
+        _prune_sessions()
 
         system_prompt = build_system_prompt() + "\n\n" + (
             "You MAY call tools when it is materially helpful. "
