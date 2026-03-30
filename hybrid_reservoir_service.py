@@ -126,11 +126,6 @@ def _touch_session(session_id: str) -> None:
 
 
 def _drop_session_state(session_id: str) -> None:
-    fwd = _dynasty_forward_tasks.get(session_id)
-    if fwd and not fwd.done():
-        fwd.cancel()
-    _dynasty_forward_tasks.pop(session_id, None)
-    _dynasty_active_job.pop(session_id, None)
     _session_queues.pop(session_id, None)
     _last_sse.pop(session_id, None)
     _dynasty_auto_cfg.pop(session_id, None)
@@ -155,6 +150,11 @@ def _prune_sessions() -> None:
         if mw_t and not mw_t.done():
             mw_t.cancel()
         _multiway_tasks.pop(sid, None)
+        fwd = _dynasty_forward_tasks.get(sid)
+        if fwd and not fwd.done():
+            fwd.cancel()
+        _dynasty_forward_tasks.pop(sid, None)
+        _dynasty_active_job.pop(sid, None)
         _drop_session_state(sid)
 
     if len(_session_last_seen) <= _MAX_SESSION_STATES:
@@ -170,19 +170,12 @@ def _prune_sessions() -> None:
         if mw_t and not mw_t.done():
             mw_t.cancel()
         _multiway_tasks.pop(sid, None)
+        fwd = _dynasty_forward_tasks.get(sid)
+        if fwd and not fwd.done():
+            fwd.cancel()
+        _dynasty_forward_tasks.pop(sid, None)
+        _dynasty_active_job.pop(sid, None)
         _drop_session_state(sid)
-
-
-def _stop_dynasty_stream(session_id: str, target_job_id: Optional[str] = None) -> None:
-    _dynasty_running[session_id] = False
-    active = _dynasty_active_job.get(session_id)
-    job_id = target_job_id or active
-    if active and (target_job_id is None or active == target_job_id):
-        _dynasty_active_job.pop(session_id, None)
-    task = _dynasty_forward_tasks.get(session_id)
-    if task and not task.done() and (job_id is None or (active == job_id)):
-        task.cancel()
-        _dynasty_forward_tasks.pop(session_id, None)
 
 
 def reduce_dynasty_regime(snapshot: dict) -> dict:
@@ -899,6 +892,16 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
     # Forward bridge SSE into our session SSE in the background
     forward_task = asyncio.create_task(_forward_bridge_events(job_id, session_id))
 
+    def stop_dynasty_stream(target_job_id: Optional[str] = None) -> None:
+        _dynasty_running[session_id] = False
+        active = _dynasty_active_job.get(session_id)
+        if active and (target_job_id is None or active == target_job_id):
+            _dynasty_active_job.pop(session_id, None)
+        task = _dynasty_forward_tasks.get(session_id)
+        if task and not task.done() and (target_job_id is None or active == target_job_id):
+            task.cancel()
+            _dynasty_forward_tasks.pop(session_id, None)
+
     # Continuous dynasty mode: return immediately, keep SSE forwarding running.
     if skill == "dynasty_step" and int(args.get("n", 1) or 0) == 0:
         prev = _dynasty_forward_tasks.get(session_id)
@@ -920,7 +923,7 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
     if skill == "dynasty_cancel":
         # Teardown immediately so UI/physiology stops even before bridge cancel poll completes.
         target = str(args.get("jobId") or "").strip() or _dynasty_active_job.get(session_id)
-        _stop_dynasty_stream(session_id, target_job_id=target)
+        stop_dynasty_stream(target_job_id=target)
 
     # Otherwise, wait for completion (poll). This keeps the LLM loop simple.
     final = None
@@ -950,7 +953,7 @@ async def _bridge_invoke(skill: str, args: Dict[str, Any], session_id: str, call
         target = None
         if isinstance(final, dict):
             target = str(((final.get("result") or {}).get("jobId") or "")).strip() or None
-        _stop_dynasty_stream(session_id, target_job_id=target)
+        stop_dynasty_stream(target_job_id=target)
 
     return final or {"jobId": job_id, "status": "unknown"}
 
@@ -1246,14 +1249,18 @@ async def _shutdown_background_tasks():
             t.cancel()
     _dynasty_auto_tasks.clear()
     _multiway_tasks.clear()
+    for t in [_reply_watcher_task, _major_daemon_task]:
+        if t and not t.done():
+            t.cancel()
+
+
+@app.on_event("shutdown")
+async def _shutdown_dynasty_forwarders():
     for t in list(_dynasty_forward_tasks.values()):
         if t and not t.done():
             t.cancel()
     _dynasty_forward_tasks.clear()
     _dynasty_active_job.clear()
-    for t in [_reply_watcher_task, _major_daemon_task]:
-        if t and not t.done():
-            t.cancel()
 
 
 async def get_dynasty_snapshot(session_id: str) -> dict:
